@@ -154,4 +154,11 @@ id_to_trainId = {label.id: label.trainId for label in labels_dict if label.train
 
 
 if __name__ == "__main__":
-    train_dataset = CityScapes("train")
+    # Example IDs from your dataset (you need to replace these with actual data from your dataset)
+    example_ids = [0, 1, 7,8,9 25, 33]
+
+# Using your existing mapping to check what they map to
+    for id in example_ids:
+        print(f"Original ID: {id} maps to Train ID: {id_to_trainId.get(id, 255)}")  # using 255 as default if not found
+
+    #train_dataset = CityScapes("train")
