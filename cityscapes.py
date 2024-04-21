@@ -68,6 +68,7 @@ class CityScapes(Dataset):
                     label_array = np.array(label)
                     label_mapped = self.map_labels(label_array)
                     label_tensor = torch.from_numpy(label_mapped).long()  # to perserve int format
+                    label_tensor = label_tensor.unsqueeze(0)
                     label_tensor = self.transform_label(label_tensor)
                     self.labels.append(label_tensor)
 
