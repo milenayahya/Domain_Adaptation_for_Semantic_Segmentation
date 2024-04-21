@@ -13,7 +13,6 @@ import sys
 import utils 
 
 
-
 class CityScapes(Dataset):
     def __init__(self, mode, cropSize=(512,1024)):
         super(CityScapes, self).__init__()
@@ -32,6 +31,8 @@ class CityScapes(Dataset):
             self.dirs= ["frankfurt", "lindau", "munster"]
         
     
+        print(self.images_path)
+        print(self.labels_path)
         self.transform_img = v2.Compose([
             v2.Resize(cropSize),
             v2.RandomCrop(cropSize),
@@ -52,6 +53,9 @@ class CityScapes(Dataset):
 
             img_files = list(img_dir_path.glob("*.png"))
             label_files = list(label_dir_path.glob("*labelTrainIds.png"))
+
+            print(img_files)
+            print(label_files)
 
             for img_path, label_path in zip(img_files,label_files):
 
