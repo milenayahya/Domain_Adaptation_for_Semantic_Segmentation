@@ -71,6 +71,7 @@ class CityScapes(Dataset):
 
         # Create tuples of (image, label) and append to samples
         self.samples.extend(zip(self.images,self.labels))
+        print(self.samples)
 
     def map_labels(self, label):
         # we vectorize the get function of a dictionary since we want to 
@@ -141,3 +142,6 @@ labels_dict = [
 
 id_to_trainId = {label.id: label.trainId for label in labels_dict if label.trainId != 255 and label.trainId != -1}
 
+
+if __name__ == "__main__":
+    train_dataset = CityScapes("train")
