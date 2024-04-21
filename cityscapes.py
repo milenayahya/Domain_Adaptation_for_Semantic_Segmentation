@@ -30,9 +30,6 @@ class CityScapes(Dataset):
             self.labels_path = self.root/ "gtFine/val"
             self.dirs= ["frankfurt", "lindau", "munster"]
         
-    
-        print(self.images_path)
-        print(self.labels_path)
         self.transform_img = v2.Compose([
             v2.Resize(cropSize),
             v2.RandomCrop(cropSize),
@@ -50,6 +47,9 @@ class CityScapes(Dataset):
         for dir_name in self.dirs: 
             img_dir_path = self.images_path / dir_name
             label_dir_path = self.labels_path / dir_name
+
+            print(img_dir_path)
+            print(label_dir_path)
 
             img_files = list(img_dir_path.glob("*.png"))
             label_files = list(label_dir_path.glob("*labelTrainIds.png"))
