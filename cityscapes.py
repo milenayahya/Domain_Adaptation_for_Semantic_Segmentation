@@ -45,6 +45,9 @@ class CityScapes(Dataset):
             img_dir_path = self.images_path / dir_name
             label_dir_path = self.labels_path / dir_name
 
+            print(img_dir_path)
+            print(label_dir_path)
+
             img_files = list(img_dir_path.glob("*.png"))
             label_files = list(label_dir_path.glob("*labelTrainIds.png"))
 
@@ -77,7 +80,7 @@ class CityScapes(Dataset):
 
             if i==1:
                 self.samples.extend(zip(self.images,self.labels))
-                print(self.samples)
+                print("Self.samples: ", self.samples)
                 break
 
         # Create tuples of (image, label) and append to samples
