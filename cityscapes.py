@@ -42,12 +42,6 @@ class CityScapes(Dataset):
 
       
         for dir_name in self.dirs: 
-           
-
-            if dir_name=="jena":
-                self.samples.extend(zip(self.images,self.labels))
-                print("Self.samples: ", self.samples)
-                break
 
             img_dir_path = self.images_path / dir_name
             label_dir_path = self.labels_path / dir_name
@@ -165,16 +159,4 @@ id_to_trainId = {label.id: label.trainId for label in labels_dict if label.train
 if __name__ == "__main__":
 
     train_dataset = CityScapes("train")
-    image1,label1 = train_dataset[0]
-    image4,label4 = train_dataset[4]
-    print("Label of first image in dataset:" , label1)
-
-    label_np = label1.numpy()  # Convert to NumPy array if not already
-    unique_labels, counts = np.unique(label_np, return_counts=True)
-    print("Unique labels found in the tensor:", unique_labels)
-    print("Counts of each label:", counts)
-
-    label_np = label4.numpy()  # Convert to NumPy array if not already
-    unique_labels, counts = np.unique(label_np, return_counts=True)
-    print("Unique labels found in the tensor:", unique_labels)
-    print("Counts of each label:", counts)
+    
