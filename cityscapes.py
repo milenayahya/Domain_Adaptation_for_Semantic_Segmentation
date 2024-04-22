@@ -65,9 +65,9 @@ class CityScapes(Dataset):
 
                     #crop label in same position as image
                     if mode=="train":
-                        label_mapped= TF.crop(label_mapped,i,j,h,w)
+                        label= TF.crop(label,i,j,h,w)
                         
-                    label_mapped = TF.resize(label_mapped,cropSize)
+                    label = TF.resize(label,cropSize)
 
                     label_array = np.array(label)
                     print("Original label IDs:", np.unique(label_array))
