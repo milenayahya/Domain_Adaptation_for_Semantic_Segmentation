@@ -165,4 +165,4 @@ if __name__ == "__main__":
 
     train_dataset = CityScapes("train")
     image,label = train_dataset[0]
-    print(label)
+    print("Label of first image in dataset:" , label)
