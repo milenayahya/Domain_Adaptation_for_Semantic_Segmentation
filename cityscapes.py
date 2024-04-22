@@ -160,26 +160,15 @@ labels_dict = [
 
 id_to_trainId = {label.id: label.trainId for label in labels_dict if label.trainId != 255 and label.trainId != -1}
 
-def visualize_image_and_label(image, label):
-    """Visualize the first image and label from a batch."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    # Assume image is [C, H, W] with C=3 and label is [H, W]
-    axes[0].imshow(image.permute(1, 2, 0))  # Convert from [C, H, W] to [H, W, C]
-    axes[0].set_title('Image')
-    axes[0].axis('off')
-
-    if label.dim() == 3 and label.size(0) == 1:  # Check if it's a single-channel label
-        label = label.squeeze(0)  # Remove channel dimension for plotting
-    axes[1].imshow(label, cmap='tab20')  # Adjust colormap to your number of classes
-    axes[1].set_title('Label')
-    axes[1].axis('off')
     
-    plt.show()
-
 
 if __name__ == "__main__":
 
     train_dataset = CityScapes("train")
     image,label = train_dataset[0]
-    visualize_image_and_label(image,label)
     print("Label of first image in dataset:" , label)
+
+    label_np = label.numpy()  # Convert to NumPy array if not already
+    unique_labels, counts = np.unique(label_np, return_counts=True)
+    print("Unique labels found in the tensor:", unique_labels)
+    print("Counts of each label:", counts)
