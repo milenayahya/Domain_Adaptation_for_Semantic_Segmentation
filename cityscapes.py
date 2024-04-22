@@ -66,21 +66,18 @@ class CityScapes(Dataset):
                     #crop label in same position as image
                     if mode=="train":
                         label= TF.crop(label,i,j,h,w)
-                        
                     label = TF.resize(label,cropSize)
 
                     label_array = np.array(label)
-                    print("Original label IDs:", np.unique(label_array))
                     label_mapped = self.map_labels(label_array)
-                    print("Mapped label IDs:", np.unique(label_mapped))
 
                     label_tensor = torch.from_numpy(label_mapped).long()  # to perserve int format
                     label_tensor = label_tensor.unsqueeze(0)
                     self.labels.append(label_tensor)
 
             if i==1:
-                #self.samples.extend(zip(self.images,self.labels))
-                # print(self.samples)
+                self.samples.extend(zip(self.images,self.labels))
+                print(self.samples)
                 break
 
         # Create tuples of (image, label) and append to samples
