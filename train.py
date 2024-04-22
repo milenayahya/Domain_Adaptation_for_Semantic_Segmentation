@@ -170,7 +170,7 @@ def parse_args():
                        help='Width of cropped/resized input image to modelwork')
     parse.add_argument('--batch_size',
                        type=int,
-                       default=4,
+                       default=2,
                        help='Number of images in each batch')
     parse.add_argument('--learning_rate',
                         type=float,
