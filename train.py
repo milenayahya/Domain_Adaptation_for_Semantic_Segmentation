@@ -138,7 +138,7 @@ def parse_args():
     parse.add_argument('--pretrain_path',
                       dest='pretrain_path',
                       type=str,
-                      default='',
+                      default='./STDCNet813M_73.91.tar',
     )
     parse.add_argument('--use_conv_last',
                        dest='use_conv_last',
@@ -146,7 +146,7 @@ def parse_args():
                        default=False,
     )
     parse.add_argument('--num_epochs',
-                       type=int, default=300,
+                       type=int, default=50,
                        help='Number of epochs to train for')
     parse.add_argument('--epoch_start_i',
                        type=int,
@@ -170,7 +170,7 @@ def parse_args():
                        help='Width of cropped/resized input image to modelwork')
     parse.add_argument('--batch_size',
                        type=int,
-                       default=2,
+                       default=10,
                        help='Number of images in each batch')
     parse.add_argument('--learning_rate',
                         type=float,
@@ -195,7 +195,7 @@ def parse_args():
     parse.add_argument('--save_model_path',
                        type=str,
                        default=None,
-                       help='path to save model')
+                       help='./results')
     parse.add_argument('--optimizer',
                        type=str,
                        default='adam',
@@ -257,3 +257,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+#modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
