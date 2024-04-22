@@ -42,6 +42,13 @@ class CityScapes(Dataset):
         i=0
         for dir_name in self.dirs: 
             i += 1
+            print("i= ", i)
+
+            if i==2:
+                self.samples.extend(zip(self.images,self.labels))
+                print("Self.samples: ", self.samples)
+                break
+
             img_dir_path = self.images_path / dir_name
             label_dir_path = self.labels_path / dir_name
 
@@ -78,10 +85,7 @@ class CityScapes(Dataset):
                     label_tensor = label_tensor.unsqueeze(0)
                     self.labels.append(label_tensor)
 
-            if i==1:
-                self.samples.extend(zip(self.images,self.labels))
-                print("Self.samples: ", self.samples)
-                break
+            
 
         # Create tuples of (image, label) and append to samples
         self.samples.extend(zip(self.images,self.labels))
