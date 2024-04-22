@@ -163,4 +163,4 @@ if __name__ == "__main__":
     for id in example_ids:
         print(f"Original ID: {id} maps to Train ID: {id_to_trainId.get(id, 255)}")  # using 255 as default if not found
 
-    #train_dataset = CityScapes("train")
+    train_dataset = CityScapes("train")
