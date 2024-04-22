@@ -216,8 +216,9 @@ def main():
     n_classes = args.num_classes
 
     mode = args.mode
-
+    print("will create train_dataset")
     train_dataset = CityScapes(mode)
+    print("Train_dataset created")
     dataloader_train = DataLoader(train_dataset,
                     batch_size=args.batch_size,
                     shuffle=False,
@@ -259,6 +260,7 @@ def main():
     val(args, model, dataloader_val)
 
 if __name__ == "__main__":
+    print("file is running")
     main()
 
 
