@@ -235,6 +235,9 @@ def main():
     ## model
     model = BiSeNet(backbone=args.backbone, n_classes=n_classes, pretrain_model=args.pretrain_path, use_conv_last=args.use_conv_last)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device: ",device)
+
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
 
