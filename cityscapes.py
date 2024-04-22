@@ -155,8 +155,10 @@ labels_dict = [
 id_to_trainId = {label.id: label.trainId for label in labels_dict if label.trainId != 255 and label.trainId != -1}
 
 
+
 if __name__ == "__main__":
     # Example IDs from your dataset (you need to replace these with actual data from your dataset)
+    print("running")
     example_ids =np.array([0, 1, 7, 8, 9, 25, 33])
 
 # Using your existing mapping to check what they map to
