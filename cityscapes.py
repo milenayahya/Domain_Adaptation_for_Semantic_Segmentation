@@ -68,15 +68,17 @@ class CityScapes(Dataset):
 
                 with Image.open(label_path) as label:
                     label_array = np.array(label)
+                    print("Original label IDs:", np.unique(label_array))
                     label_mapped = self.map_labels(label_array)
+                    print("Mapped label IDs:", np.unique(label_mapped))
                     label_tensor = torch.from_numpy(label_mapped).long()  # to perserve int format
                     label_tensor = label_tensor.unsqueeze(0)
                     label_tensor = self.transform_label(label_tensor)
                     self.labels.append(label_tensor)
 
-            if i==2:
-                self.samples.extend(zip(self.images,self.labels))
-                print(self.samples)
+            if i==1:
+                #self.samples.extend(zip(self.images,self.labels))
+                # print(self.samples)
                 break
 
         # Create tuples of (image, label) and append to samples
