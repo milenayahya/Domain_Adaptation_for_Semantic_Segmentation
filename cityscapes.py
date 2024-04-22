@@ -45,14 +45,9 @@ class CityScapes(Dataset):
             img_dir_path = self.images_path / dir_name
             label_dir_path = self.labels_path / dir_name
 
-            print(img_dir_path)
-            print(label_dir_path)
-
             img_files = list(img_dir_path.glob("*.png"))
             label_files = list(label_dir_path.glob("*labelTrainIds.png"))
 
-            print(img_files)
-            print(label_files)
 
             for img_path, label_path in zip(img_files,label_files):
 
@@ -68,16 +63,16 @@ class CityScapes(Dataset):
 
                 with Image.open(label_path) as label:
 
-                    label_array = np.array(label)
-                    print("Original label IDs:", np.unique(label_array))
-                    label_mapped = self.map_labels(label_array)
-                    print("Mapped label IDs:", np.unique(label_mapped))
-
                     #crop label in same position as image
                     if mode=="train":
                         label_mapped= TF.crop(label_mapped,i,j,h,w)
                         
                     label_mapped = TF.resize(label_mapped,cropSize)
+
+                    label_array = np.array(label)
+                    print("Original label IDs:", np.unique(label_array))
+                    label_mapped = self.map_labels(label_array)
+                    print("Mapped label IDs:", np.unique(label_mapped))
 
                     label_tensor = torch.from_numpy(label_mapped).long()  # to perserve int format
                     label_tensor = label_tensor.unsqueeze(0)
@@ -164,12 +159,5 @@ id_to_trainId = {label.id: label.trainId for label in labels_dict if label.train
 
 
 if __name__ == "__main__":
-    # Example IDs from your dataset (you need to replace these with actual data from your dataset)
-    print("running")
-    example_ids =np.array([0, 1, 7, 8, 9, 25, 33])
-
-# Using your existing mapping to check what they map to
-    for id in example_ids:
-        print(f"Original ID: {id} maps to Train ID: {id_to_trainId.get(id, 255)}")  # using 255 as default if not found
 
     train_dataset = CityScapes("train")
