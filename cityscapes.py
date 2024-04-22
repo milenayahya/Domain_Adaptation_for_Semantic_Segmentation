@@ -21,8 +21,8 @@ class CityScapes(Dataset):
         super(CityScapes, self).__init__()
 
         self.mode=mode
-       # self.root = Path("/content/Cityscapes/Cityscapes/Cityspaces")
-        self.root = Path("./Cityscapes/Cityscapes/Cityspaces")
+        self.root = Path("/content/Cityscapes/Cityscapes/Cityspaces")
+        #self.root = Path("./Cityscapes/Cityscapes/Cityspaces")
         
 
         if mode=="train":
