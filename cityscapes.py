@@ -39,12 +39,11 @@ class CityScapes(Dataset):
         self.images=[]
         self.labels =[]
 
-        i=0
+      
         for dir_name in self.dirs: 
-            i += 1
-            print("i= ", i)
+           
 
-            if i==2:
+            if dir_name=="krefeld":
                 self.samples.extend(zip(self.images,self.labels))
                 print("Self.samples: ", self.samples)
                 break
