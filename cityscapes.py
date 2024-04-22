@@ -167,7 +167,7 @@ if __name__ == "__main__":
     train_dataset = CityScapes("train")
     image1,label1 = train_dataset[0]
     image4,label4 = train_dataset[4]
-    print("Label of first image in dataset:" , label)
+    print("Label of first image in dataset:" , label1)
 
     label_np = label1.numpy()  # Convert to NumPy array if not already
     unique_labels, counts = np.unique(label_np, return_counts=True)
