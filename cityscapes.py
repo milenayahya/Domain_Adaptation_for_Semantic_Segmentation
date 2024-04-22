@@ -43,7 +43,7 @@ class CityScapes(Dataset):
         for dir_name in self.dirs: 
            
 
-            if dir_name=="krefeld":
+            if dir_name=="jena":
                 self.samples.extend(zip(self.images,self.labels))
                 print("Self.samples: ", self.samples)
                 break
@@ -164,3 +164,5 @@ id_to_trainId = {label.id: label.trainId for label in labels_dict if label.train
 if __name__ == "__main__":
 
     train_dataset = CityScapes("train")
+    image,label = train_dataset[0]
+    print(label)
