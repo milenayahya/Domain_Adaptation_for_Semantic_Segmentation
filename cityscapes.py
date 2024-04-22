@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 from torchvision import transforms as v2
+import torchvision.transforms.functional as TF
 from pathlib import Path
 from collections import namedtuple
 import numpy as np
@@ -31,15 +32,9 @@ class CityScapes(Dataset):
             self.dirs= ["frankfurt", "lindau", "munster"]
         
         self.transform_img = v2.Compose([
-            v2.Resize(cropSize),
-            v2.RandomCrop(cropSize),
             v2.ToTensor(), 
             v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))])
         
-        self.transform_label = v2.Compose([
-            v2.Resize(cropSize, interpolation=Image.NEAREST),
-            v2.RandomCrop(cropSize)])
-
         self.samples=[]
         self.images=[]
         self.labels =[]
@@ -62,18 +57,30 @@ class CityScapes(Dataset):
             for img_path, label_path in zip(img_files,label_files):
 
                 with Image.open(img_path).convert('RGB') as img:
+                    if mode == "train":
+                        i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
+                        img = TF.crop(img,i,j,h,w)
+                    img = TF.resize(img, cropSize)
                     img_tensor= self.transform_img(img)
                     self.images.append(img_tensor)
 
+                
 
                 with Image.open(label_path) as label:
+
                     label_array = np.array(label)
                     print("Original label IDs:", np.unique(label_array))
                     label_mapped = self.map_labels(label_array)
                     print("Mapped label IDs:", np.unique(label_mapped))
+
+                    #crop label in same position as image
+                    if mode=="train":
+                        label_mapped= TF.crop(label_mapped,i,j,h,w)
+                        
+                    label_mapped = TF.resize(label_mapped,cropSize)
+
                     label_tensor = torch.from_numpy(label_mapped).long()  # to perserve int format
                     label_tensor = label_tensor.unsqueeze(0)
-                    label_tensor = self.transform_label(label_tensor)
                     self.labels.append(label_tensor)
 
             if i==1:
