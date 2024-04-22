@@ -13,6 +13,7 @@ import os
 import os.path
 import sys
 import utils 
+import random
 
 
 class CityScapes(Dataset):
@@ -20,17 +21,24 @@ class CityScapes(Dataset):
         super(CityScapes, self).__init__()
 
         self.mode=mode
-        self.root = Path("/content/Cityscapes/Cityscapes/Cityspaces")
+       # self.root = Path("/content/Cityscapes/Cityscapes/Cityspaces")
+        self.root = Path("./Cityscapes/Cityscapes/Cityspaces")
+        
 
         if mode=="train":
             self.images_path = self.root / "images/train"
-            self.labels_path = self.root/ "gtFine/train"
+            self.labels_path = self.root / "gtFine/train"
             self.dirs = ["hanover", "jena", "krefeld", "monchengladbach", "strasbourg", "stuttgart", "tubingen", "ulm", "weimar", "zurich"]            
 
         if mode=="val":
             self.images_path = self.root / "images/val"
             self.labels_path = self.root/ "gtFine/val"
             self.dirs= ["frankfurt", "lindau", "munster"]
+        
+        print("Checking paths:")
+        print("Images path:", self.images_path)
+        print("Labels path:", self.labels_path)
+        print("Directories:", self.dirs)
         
         self.transform_img = v2.Compose([
             v2.ToTensor(), 
@@ -45,8 +53,8 @@ class CityScapes(Dataset):
 
             img_dir_path = self.images_path / dir_name
             label_dir_path = self.labels_path / dir_name
-            img_files = list(img_dir_path.glob("*.png"))
-            label_files = list(label_dir_path.glob("*labelTrainIds.png"))
+            img_files = sorted(img_dir_path.glob("*.png"))
+            label_files = sorted(label_dir_path.glob("*labelTrainIds.png"))
 
 
             for img_path, label_path in zip(img_files,label_files):
@@ -79,7 +87,13 @@ class CityScapes(Dataset):
 
         # Create tuples of (image, label) and append to samples
         self.samples.extend(zip(self.images,self.labels))
-        print(self.samples)
+        #print(self.samples)
+        print("Cityscapes dataset initialized")
+
+        selected_labels = random.sample(self.labels, 150)  
+        unique_labels = torch.unique(torch.cat(selected_labels))
+        print("Unique labels in the dataset:", unique_labels)
+
 
     def map_labels(self, label):
         # we vectorize the get function of a dictionary since we want to 
@@ -155,4 +169,5 @@ id_to_trainId = {label.id: label.trainId for label in labels_dict if label.train
 if __name__ == "__main__":
 
     train_dataset = CityScapes("train")
+    val_dataset = CityScapes("val")
     
