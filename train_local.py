@@ -112,7 +112,12 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
             import os
             if not os.path.isdir(args.save_model_path):
                 os.mkdir(args.save_model_path)
-            torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
+         
+            ###with cuda
+            # torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
+            
+            ###without cuda
+            torch.save(model.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
 
         if epoch % args.validation_step == 0 and epoch != 0:
             precision, miou = val(args, model, dataloader_val)
@@ -120,9 +125,15 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
                 max_miou = miou
                 import os
                 os.makedirs(args.save_model_path, exist_ok=True)
-                torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
+                ###with cuda
+                # torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
+                
+                ###without cuda
+                torch.save(model.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
+            writer.add_scalar('epoch/precision_val', precision, epoch)
             writer.add_scalar('epoch/precision_val', precision, epoch)
             writer.add_scalar('epoch/miou val', miou, epoch)
+            
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -166,7 +177,7 @@ def parse_args():
                        help='Start counting epochs from this number')
     parse.add_argument('--checkpoint_step',
                        type=int,
-                       default=10,
+                       default=2,
                        help='How often to save checkpoints (epochs)')
     parse.add_argument('--validation_step',
                        type=int,
