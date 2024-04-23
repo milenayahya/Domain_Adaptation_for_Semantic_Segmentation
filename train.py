@@ -72,8 +72,11 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
         tq.set_description('epoch %d, lr %f' % (epoch, lr))
         loss_record = []
         for i, (data, label) in enumerate(dataloader_train):
+            
             data = data.cuda()
             label = label.long().cuda()
+            
+
             optimizer.zero_grad()
 
             with amp.autocast():
@@ -194,8 +197,8 @@ def parse_args():
                        help='whether to user gpu for training')
     parse.add_argument('--save_model_path',
                        type=str,
-                       default=None,
-                       help='./results')
+                       default='./results',
+                       help='path to save model')
     parse.add_argument('--optimizer',
                        type=str,
                        default='adam',
@@ -216,9 +219,9 @@ def main():
     n_classes = args.num_classes
 
     mode = args.mode
-    print("will create train_dataset")
+
     train_dataset = CityScapes(mode)
-    print("Train_dataset created")
+    
     dataloader_train = DataLoader(train_dataset,
                     batch_size=args.batch_size,
                     shuffle=False,

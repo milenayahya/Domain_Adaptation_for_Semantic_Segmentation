@@ -206,8 +206,8 @@ def parse_args():
                        help='whether to user gpu for training')
     parse.add_argument('--save_model_path',
                        type=str,
-                       default=None,
-                       help='./results')
+                       default='./results',
+                       help='path to save model')
     parse.add_argument('--optimizer',
                        type=str,
                        default='adam',
