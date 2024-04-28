@@ -2,6 +2,7 @@
 # -*- encoding: utf-8 -*-
 from model.model_stages import BiSeNet
 from cityscapes import CityScapes
+from gta5 import gta5
 import torch
 from torch.utils.data import DataLoader
 import logging
@@ -193,7 +194,7 @@ def parse_args():
                        help='Width of cropped/resized input image to modelwork')
     parse.add_argument('--batch_size',
                        type=int,
-                       default=2,
+                       default=8,
                        help='Number of images in each batch')
     parse.add_argument('--learning_rate',
                         type=float,
@@ -232,7 +233,7 @@ def parse_args():
     return parse.parse_args()
 
 
-def main():
+def main(tr_dataset, vl_dataset):
     args = parse_args()
 
     ## dataset
@@ -241,7 +242,10 @@ def main():
     mode = args.mode
     print("will create train_dataset")
 
-    train_dataset = CityScapes(mode)
+    if tr_dataset==0:
+        train_dataset = CityScapes(mode)
+    elif tr_dataset==1:
+        train_dataset = gta5(mode)
 
     ###################################
     if len(train_dataset) == 0:
@@ -255,8 +259,12 @@ def main():
                     num_workers=args.num_workers,
                     pin_memory=False,
                     drop_last=True)
+    
+    if vl_dataset==0:
+        val_dataset = CityScapes(mode='val')
+    elif vl_dataset==1:
+        val_dataset = gta5(mode='val')
 
-    val_dataset = CityScapes(mode='val')
     dataloader_val = DataLoader(val_dataset,
                        batch_size=1,
                        shuffle=False,
@@ -292,7 +300,13 @@ def main():
 
 if __name__ == "__main__":
     print("file is running")
-    main()
+
+    ##2a 
+  #  main(0,0)
+
+    ##2b
+    main(1,1)
+
 
 
 #modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
