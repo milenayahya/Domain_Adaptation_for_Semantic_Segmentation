@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- encoding: utf-8 -*-
 from model.model_stages import BiSeNet
-from cityscapes import CityScapes
+from Datasets.cityscapes import CityScapes
 from Datasets.gta5 import gta5
 import torch
 from torch.utils.data import DataLoader
@@ -309,10 +309,10 @@ if __name__ == "__main__":
     main(1,1)
 
     ##2c.1
-    main(1,0)
+    #main(1,0)
 
     ##2c.2
-    main(1,0,aug=True)
+    #main(1,0,aug=True)
 
 
 

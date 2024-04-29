@@ -5,7 +5,7 @@ from torchvision import transforms as v2
 import torchvision.transforms.functional as TF
 from pathlib import Path
 import numpy as np
-from augmentation import augment
+from Datasets.augmentation import augment
 
 #run splitGTA5.py before to split the data into train and val
 
