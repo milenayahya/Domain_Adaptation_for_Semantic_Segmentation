@@ -213,7 +213,7 @@ def parse_args():
     return parse.parse_args()
 
 
-def main(tr_dataset, vl_dataset):
+def main(tr_dataset, vl_dataset,aug=None):
     args = parse_args()
 
     ## dataset
@@ -223,8 +223,10 @@ def main(tr_dataset, vl_dataset):
 
     if tr_dataset==0:
         train_dataset = CityScapes(mode)
-    elif tr_dataset==1:
+    elif tr_dataset==1 and aug==None:
         train_dataset = gta5(mode)
+    elif tr_dataset==1 and aug== True: 
+        train_dataset = gta5(mode, aug=True)
     
     dataloader_train = DataLoader(train_dataset,
                     batch_size=args.batch_size,
@@ -274,10 +276,15 @@ if __name__ == "__main__":
     print("file is running")
    
     ##2a 
-    main(0,0)
+  #  main(0,0)
 
     ##2b
     main(1,1)
 
+    ##2c.1
+    main(1,0)
+
+    ##2c.2
+    main(1,0,aug=True)
 
 #modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path

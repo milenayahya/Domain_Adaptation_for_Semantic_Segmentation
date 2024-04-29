@@ -4,12 +4,8 @@ from PIL import Image
 from torchvision import transforms as v2
 import torchvision.transforms.functional as TF
 from pathlib import Path
-from collections import namedtuple
 import numpy as np
-import matplotlib.pyplot as plt
-import os
-import os.path
-import random
+from augmentation import augment
 
 #run splitGTA5.py before to split the data into train and val
 
@@ -53,25 +49,27 @@ class gta5(Dataset):
         label_files = sorted(self.labels_path.glob("*.png"))
 
         for img_path, label_path in zip(img_files,label_files):
-            with Image.open(img_path).convert('RGB') as img:
+            with Image.open(img_path).convert('RGB') as img, Image.open(label_path) as label:
                 if mode == "train":
                     #i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
                     #img = TF.crop(img,i,j,h,w)
-                    img = TF.resize(img, cropSize)
+                     #label= TF.crop(label,i,j,h,w)
 
+                    img = TF.resize(img, cropSize)
+                    label = TF.resize(label,cropSize)
+
+                    ## data augmentation if training
+                    if aug == True:
+                        img, label = augment(img,label)
+                   
                 img_tensor= self.transform(img)
                 self.images.append(img_tensor)
             
-
-            with Image.open(label_path) as label:
-
-                if mode=="train":
-                        #label= TF.crop(label,i,j,h,w)
-                        label = TF.resize(label,cropSize)
                 label= np.array(label)
                 label_copy = 255 * np.ones(label.shape, dtype=np.float32)
                 for k, v in self.id_to_trainid.items():
                     label_copy[label == k] = v
+
                 label_tensor= torch.tensor(label_copy,dtype=torch.float32)
                 self.labels.append(label_tensor)
 
@@ -79,7 +77,7 @@ class gta5(Dataset):
               break
            
 
-        print("DONE processing images and labels")
+        print("DONE processing 100 images and labels")
 
         self.samples.extend(zip(self.images,self.labels))
         print("GTA5 dataset initialized")
@@ -100,6 +98,6 @@ class gta5(Dataset):
 
 if __name__ == "__main__":
 
-    train_dataset = gta5("train")
+    train_dataset = gta5("train", aug=True)
     img,lbl = train_dataset[4]
     print(img,lbl)
