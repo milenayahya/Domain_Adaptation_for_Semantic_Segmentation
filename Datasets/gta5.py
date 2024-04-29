@@ -14,7 +14,7 @@ import random
 #run splitGTA5.py before to split the data into train and val
 
 class gta5(Dataset):
-    def __init__(self,mode,aug=None):
+    def __init__(self,mode,aug=None,cropSize=(512,1024)):
         super(gta5, self).__init__()
 
         self.mode=mode
@@ -54,13 +54,20 @@ class gta5(Dataset):
 
         for img_path, label_path in zip(img_files,label_files):
             with Image.open(img_path).convert('RGB') as img:
-                #img = TF.resize(img, cropSize)
+                if mode == "train":
+                    #i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
+                    #img = TF.crop(img,i,j,h,w)
+                    img = TF.resize(img, cropSize)
+
                 img_tensor= self.transform(img)
                 self.images.append(img_tensor)
             
 
             with Image.open(label_path) as label:
-                #label = TF.resize(label,cropSize)
+
+                if mode=="train":
+                        #label= TF.crop(label,i,j,h,w)
+                        label = TF.resize(label,cropSize)
                 label= np.array(label)
                 label_copy = 255 * np.ones(label.shape, dtype=np.float32)
                 for k, v in self.id_to_trainid.items():
@@ -69,10 +76,10 @@ class gta5(Dataset):
                 self.labels.append(label_tensor)
 
             if(len(self.images))==100:
-                break
+              break
            
 
-        print("DONE processing 100 images and labels")
+        print("DONE processing images and labels")
 
         self.samples.extend(zip(self.images,self.labels))
         print("GTA5 dataset initialized")

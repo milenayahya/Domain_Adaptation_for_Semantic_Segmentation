@@ -35,6 +35,7 @@ def move_dir(samples, dir, mode):
         shutil.move(sample[1], labels_dir)
 
 if __name__== '__main__':
-    train_subset, val_subset = split80_20("./GTA5/GTA5")
-    move_dir(train_subset, "./GTA5/GTA5", "train")
-    move_dir(val_subset, "./GTA5/GTA5", "val")
+    train_subset, val_subset = split80_20("./Datasets/GTA5/GTA5")
+    move_dir(train_subset, "./Datasets/GTA5/GTA5", "train")
+    move_dir(val_subset, "./Datasets/GTA5/GTA5", "val")
+

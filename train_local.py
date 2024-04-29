@@ -2,7 +2,7 @@
 # -*- encoding: utf-8 -*-
 from model.model_stages import BiSeNet
 from cityscapes import CityScapes
-from gta5 import gta5
+from Datasets.gta5 import gta5
 import torch
 from torch.utils.data import DataLoader
 import logging
@@ -13,7 +13,6 @@ import torch.cuda.amp as amp
 from utils import poly_lr_scheduler
 from utils import reverse_one_hot, compute_global_accuracy, fast_hist, per_class_iu
 from tqdm import tqdm
-
 
 logger = logging.getLogger()
 

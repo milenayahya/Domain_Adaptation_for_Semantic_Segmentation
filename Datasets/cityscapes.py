@@ -57,10 +57,11 @@ class CityScapes(Dataset):
             for img_path, label_path in zip(img_files,label_files):
 
                 with Image.open(img_path).convert('RGB') as img:
-                   # if mode == "train":
-                    #    i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
-                     #   img = TF.crop(img,i,j,h,w)
-                    img = TF.resize(img, cropSize)
+                    if mode == "train":
+                        #i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
+                        #img = TF.crop(img,i,j,h,w)
+                        img = TF.resize(img, cropSize)
+
                     img_tensor= self.transform(img)
                     self.images.append(img_tensor)
 
@@ -69,9 +70,9 @@ class CityScapes(Dataset):
                 with Image.open(label_path) as label:
 
                     #crop label in same position as image
-                   # if mode=="train":
-                    #    label= TF.crop(label,i,j,h,w)
-                    label = TF.resize(label,cropSize)
+                    if mode=="train":
+                        #label= TF.crop(label,i,j,h,w)
+                        label = TF.resize(label,cropSize)
 
                     label_array = np.array(label)
                     label_mapped = self.map_labels(label_array)
