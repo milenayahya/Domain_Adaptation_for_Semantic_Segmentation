@@ -1,3 +1,4 @@
+from typing import Literal
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
@@ -7,15 +8,31 @@ from pathlib import Path
 import numpy as np
 from Datasets.augmentation import augment
 from Datasets import GTA5_BASE_PATH
+import logging
 
+logger = logging.getLogger(__name__)
 # run splitGTA5.py before to split the data into train and val
 
 
 class gta5(Dataset):
-    def __init__(self, mode, aug=None, cropSize=(512, 1024)):
+    mode: Literal["train", "val"]
+    aug: bool
+    cropSize: tuple[int, int]
+    load_mode: Literal["instant", "on_request"]
+
+    def __init__(
+        self,
+        mode: Literal["train", "val"],
+        aug: bool = False,
+        cropSize: tuple[int, int] = (512, 1024),
+        load_mode: Literal["instant", "on_request"] = "on_request",
+    ):
         super(gta5, self).__init__()
 
         self.mode = mode
+        self.cropSize = cropSize
+        self.load_mode = load_mode
+        self.aug = aug
 
         # self.root = Path("/content/GTA5/GTA5")  #google colab path
         self.root = Path(GTA5_BASE_PATH)  # local path
@@ -28,9 +45,8 @@ class gta5(Dataset):
             self.images_path = self.root / "images/val"
             self.labels_path = self.root / "labels/val"
 
-        print("Checking paths:")
-        print("Images path:", self.images_path)
-        print("Labels path:", self.labels_path)
+        logger.info("Images path:", self.images_path)
+        logger.info("Labels path:", self.labels_path)
 
         # mean and std of ImageNet dataset
         self.transform = v2.Compose(
@@ -62,64 +78,61 @@ class gta5(Dataset):
             33: 18,
         }
 
-        self.samples = []
         self.images = []
         self.labels = []
 
-        img_files = sorted(self.images_path.glob("*.png"))
-        label_files = sorted(self.labels_path.glob("*.png"))
+        self.image_filenames = sorted(self.images_path.glob("*.png"))
+        self.label_filenames = sorted(self.labels_path.glob("*.png"))
 
-        for img_path, label_path in zip(img_files, label_files):
-            with Image.open(img_path).convert("RGB") as img, Image.open(
-                label_path
-            ) as label:
-                if mode == "train":
-                    # i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
-                    # img = TF.crop(img,i,j,h,w)
-                    # label= TF.crop(label,i,j,h,w)
-
-                    img = TF.resize(img, cropSize)
-                    label = TF.resize(label, cropSize)
-
-                    ## data augmentation if training
-                    if aug == True:
-                        img, label = augment(img, label)
-
-                img_tensor = self.transform(img)
+        if self.load_mode == "instant":
+            for img_path, label_path in zip(self.image_filenames, self.label_filenames):
+                img_tensor, label_tensor = self.read_image(img_path, label_path)
                 self.images.append(img_tensor)
-
-                label = np.array(label)
-                label_copy = 255 * np.ones(label.shape, dtype=np.float32)
-                for k, v in self.id_to_trainid.items():
-                    label_copy[label == k] = v
-
-                label_tensor = torch.tensor(label_copy, dtype=torch.float32)
                 self.labels.append(label_tensor)
 
-            if (len(self.images)) == 100:
-                break
-
         assert (
-            len(self.images) > 0
+            len(self.image_filenames) > 0
         ), f"Seems like Dataset is Missing {self.images_path=} {self.root=}"
 
-        print("DONE processing 100 images and labels")
-
-        self.samples.extend(zip(self.images, self.labels))
-        print("GTA5 dataset initialized")
-
-        # selected_labels = random.sample(self.labels, 100)
-        # unique_labels = torch.unique(torch.cat(selected_labels))
-        # print("Unique labels in the dataset:", unique_labels)
+        logger.info(f"DONE processing {len(self)} images and labels")
 
     def __getitem__(self, idx):
-        image = self.images[idx]
-        label = self.labels[idx]
+        if self.load_mode == "instant":
+            image = self.images[idx]
+            label = self.labels[idx]
+            return image, label
+        else:
+            img_path, label_path = self.image_filenames[idx], self.label_filenames[idx]
+            return self.read_image(img_path, label_path)
 
-        return image, label
+    def read_image(self, img_path: str, label_path: str) -> tuple:
+        with Image.open(img_path).convert("RGB") as img, Image.open(
+            label_path
+        ) as label:
+            if self.mode == "train":
+                # i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
+                # img = TF.crop(img,i,j,h,w)
+                # label= TF.crop(label,i,j,h,w)
+
+                img = TF.resize(img, self.cropSize)
+                label = TF.resize(label, self.cropSize)
+
+                ## data augmentation if training
+                if self.aug:
+                    img, label = augment(img, label)
+
+            img_tensor = self.transform(img)
+
+            label = np.array(label)
+            label_copy = 255 * np.ones(label.shape, dtype=np.float32)
+            for k, v in self.id_to_trainid.items():
+                label_copy[label == k] = v
+
+            label_tensor = torch.tensor(label_copy, dtype=torch.float32)
+            return img_tensor, label_tensor
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.image_filenames)
 
 
 if __name__ == "__main__":
