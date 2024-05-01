@@ -18,26 +18,28 @@ logger = logging.getLogger()
 
 
 def val(args, model, dataloader):
-    print('start val!')
+    print("start val!")
     with torch.no_grad():
         model.eval()
         precision_record = []
         hist = np.zeros((args.num_classes, args.num_classes))
         for i, (data, label) in enumerate(dataloader):
             label = label.type(torch.LongTensor)
-            data = data.to(torch.device("cpu"))
-            label = label.long().to(torch.device("cpu"))
-
+            if not args.use_gpu:
+                data = data.to(torch.device("cpu"))
+                label = label.long().to(torch.device("cpu"))
 
             # get RGB predict image
             predict, _, _ = model(data)
             predict = predict.squeeze(0)
             predict = reverse_one_hot(predict)
-            predict = np.array(predict.cpu())
+            if not args.use_gpu:
+                predict = np.array(predict.cpu())
 
             # get RGB label image
             label = label.squeeze()
-            label = np.array(label.cpu())
+            if not args.use_gpu:
+                label = np.array(label.cpu())
 
             # compute per pixel accuracy
             precision = compute_global_accuracy(predict, label)
@@ -51,188 +53,197 @@ def val(args, model, dataloader):
         precision = np.mean(precision_record)
         miou_list = per_class_iu(hist)
         miou = np.mean(miou_list)
-        print('precision per pixel for test: %.3f' % precision)
-        print('mIoU for validation: %.3f' % miou)
-        print(f'mIoU per class: {miou_list}')
+        print("precision per pixel for test: %.3f" % precision)
+        print("mIoU for validation: %.3f" % miou)
+        print(f"mIoU per class: {miou_list}")
 
         return precision, miou
 
 
 def train(args, model, optimizer, dataloader_train, dataloader_val):
-    writer = SummaryWriter(comment=''.format(args.optimizer))
+    writer = SummaryWriter(comment="{}".format(args.optimizer))
 
-    #if torch.cuda.is_available():
-     #   scaler = amp.GradScaler()
-    
+    if torch.cuda.is_available() and args.use_gpu:
+        scaler = amp.GradScaler()
 
     loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
     max_miou = 0
     step = 0
     for epoch in range(args.num_epochs):
-        lr = poly_lr_scheduler(optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs)
+        lr = poly_lr_scheduler(
+            optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs
+        )
         model.train()
         tq = tqdm(total=len(dataloader_train) * args.batch_size)
-        tq.set_description('epoch %d, lr %f' % (epoch, lr))
+        tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
         for i, (data, label) in enumerate(dataloader_train):
             ##############################################
-            #data = data.cuda()
-            #label = label.long().cuda()
+            # data = data.cuda()
+            # label = label.long().cuda()
             ##############################################
-            data = data.to(torch.device("cpu"))
-            label = label.long().to(torch.device("cpu"))
+            if not args.use_gpu:
+                data = data.to(torch.device("cpu"))
+                label = label.long().to(torch.device("cpu"))
 
             optimizer.zero_grad()
 
-            #with amp.autocast():
+            # with amp.autocast():
             output, out16, out32 = model(data)
             loss1 = loss_func(output, label.squeeze(1))
             loss2 = loss_func(out16, label.squeeze(1))
             loss3 = loss_func(out32, label.squeeze(1))
             loss = loss1 + loss2 + loss3
 
-           # scaler.scale(loss).backward()
-            #scaler.step(optimizer)
-            #scaler.update()
+            if args.use_gpu:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
             loss.backward()
             optimizer.step()
 
-
             tq.update(args.batch_size)
-            tq.set_postfix(loss='%.6f' % loss)
+            tq.set_postfix(loss="%.6f" % loss)
             step += 1
-            writer.add_scalar('loss_step', loss, step)
+            writer.add_scalar("loss_step", loss, step)
             loss_record.append(loss.item())
         tq.close()
         loss_train_mean = np.mean(loss_record)
-        writer.add_scalar('epoch/loss_epoch_train', float(loss_train_mean), epoch)
-        print('loss for train : %f' % (loss_train_mean))
+        writer.add_scalar("epoch/loss_epoch_train", float(loss_train_mean), epoch)
+        print("loss for train : %f" % (loss_train_mean))
         if epoch % args.checkpoint_step == 0 and epoch != 0:
             import os
+
             if not os.path.isdir(args.save_model_path):
                 os.mkdir(args.save_model_path)
-         
-            ###with cuda
-            # torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
-            
-            ###without cuda
-            torch.save(model.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
+
+            if args.use_gpu:
+                torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
+            else:
+                torch.save(
+                    model.state_dict(), os.path.join(args.save_model_path, "latest.pth")
+                    )
 
         if epoch % args.validation_step == 0 and epoch != 0:
             precision, miou = val(args, model, dataloader_val)
             if miou > max_miou:
                 max_miou = miou
                 import os
+
                 os.makedirs(args.save_model_path, exist_ok=True)
-                ###with cuda
-                # torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
-                
-                ###without cuda
-                torch.save(model.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
-            writer.add_scalar('epoch/precision_val', precision, epoch)
-            writer.add_scalar('epoch/precision_val', precision, epoch)
-            writer.add_scalar('epoch/miou val', miou, epoch)
-            
+                if args.use_gpu:
+                    torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
+                else:
+                    torch.save(
+                        model.state_dict(), os.path.join(args.save_model_path, "best.pth")
+                    )
+            writer.add_scalar("epoch/precision_val", precision, epoch)
+            writer.add_scalar("epoch/precision_val", precision, epoch)
+            writer.add_scalar("epoch/miou val", miou, epoch)
+
 
 def str2bool(v):
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+    if v.lower() in ("yes", "true", "t", "y", "1"):
         return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+    elif v.lower() in ("no", "false", "f", "n", "0"):
         return False
     else:
-        raise argparse.ArgumentTypeError('Unsupported value encountered.')
+        raise argparse.ArgumentTypeError("Unsupported value encountered.")
 
 
 def parse_args():
     parse = argparse.ArgumentParser()
 
-    parse.add_argument('--mode',
-                       dest='mode',
-                       type=str,
-                       default='train',
+    parse.add_argument(
+        "--mode",
+        dest="mode",
+        type=str,
+        default="train",
     )
 
-    parse.add_argument('--backbone',
-                       dest='backbone',
-                       type=str,
-                       default='CatmodelSmall',
+    parse.add_argument(
+        "--backbone",
+        dest="backbone",
+        type=str,
+        default="CatmodelSmall",
     )
-    parse.add_argument('--pretrain_path',
-                      dest='pretrain_path',
-                      type=str,
-                      default='./STDCNet813M_73.91.tar',
+    parse.add_argument(
+        "--pretrain_path",
+        dest="pretrain_path",
+        type=str,
+        default="./STDCNet813M_73.91.tar",
     )
-    parse.add_argument('--use_conv_last',
-                       dest='use_conv_last',
-                       type=str2bool,
-                       default=False,
+    parse.add_argument(
+        "--use_conv_last",
+        dest="use_conv_last",
+        type=str2bool,
+        default=False,
     )
-    parse.add_argument('--num_epochs',
-                       type=int, default=50,
-                       help='Number of epochs to train for')
-    parse.add_argument('--epoch_start_i',
-                       type=int,
-                       default=0,
-                       help='Start counting epochs from this number')
-    parse.add_argument('--checkpoint_step',
-                       type=int,
-                       default=2,
-                       help='How often to save checkpoints (epochs)')
-    parse.add_argument('--validation_step',
-                       type=int,
-                       default=1,
-                       help='How often to perform validation (epochs)')
-    parse.add_argument('--crop_height',
-                       type=int,
-                       default=512,
-                       help='Height of cropped/resized input image to modelwork')
-    parse.add_argument('--crop_width',
-                       type=int,
-                       default=1024,
-                       help='Width of cropped/resized input image to modelwork')
-    parse.add_argument('--batch_size',
-                       type=int,
-                       default=8,
-                       help='Number of images in each batch')
-    parse.add_argument('--learning_rate',
-                        type=float,
-                        default=0.01,
-                        help='learning rate used for train')
-    parse.add_argument('--num_workers',
-                       type=int,
-                       default=4,
-                       help='num of workers')
-    parse.add_argument('--num_classes',
-                       type=int,
-                       default=19,
-                       help='num of object classes (with void)')
-    parse.add_argument('--cuda',
-                       type=str,
-                       default='0',
-                       help='GPU ids used for training')
-    parse.add_argument('--use_gpu',
-                       type=bool,
-                       default=True,
-                       help='whether to user gpu for training')
-    parse.add_argument('--save_model_path',
-                       type=str,
-                       default='./results',
-                       help='path to save model')
-    parse.add_argument('--optimizer',
-                       type=str,
-                       default='adam',
-                       help='optimizer, support rmsprop, sgd, adam')
-    parse.add_argument('--loss',
-                       type=str,
-                       default='crossentropy',
-                       help='loss function')
-
+    parse.add_argument(
+        "--num_epochs", type=int, default=50, help="Number of epochs to train for"
+    )
+    parse.add_argument(
+        "--epoch_start_i",
+        type=int,
+        default=0,
+        help="Start counting epochs from this number",
+    )
+    parse.add_argument(
+        "--checkpoint_step",
+        type=int,
+        default=2,
+        help="How often to save checkpoints (epochs)",
+    )
+    parse.add_argument(
+        "--validation_step",
+        type=int,
+        default=1,
+        help="How often to perform validation (epochs)",
+    )
+    parse.add_argument(
+        "--crop_height",
+        type=int,
+        default=512,
+        help="Height of cropped/resized input image to modelwork",
+    )
+    parse.add_argument(
+        "--crop_width",
+        type=int,
+        default=1024,
+        help="Width of cropped/resized input image to modelwork",
+    )
+    parse.add_argument(
+        "--batch_size", type=int, default=8, help="Number of images in each batch"
+    )
+    parse.add_argument(
+        "--learning_rate", type=float, default=0.01, help="learning rate used for train"
+    )
+    parse.add_argument("--num_workers", type=int, default=4, help="num of workers")
+    parse.add_argument(
+        "--num_classes", type=int, default=19, help="num of object classes (with void)"
+    )
+    parse.add_argument(
+        "--cuda", type=str, default="0", help="GPU ids used for training"
+    )
+    parse.add_argument(
+        "--use_gpu", type=bool, default=True, help="whether to user gpu for training"
+    )
+    parse.add_argument(
+        "--save_model_path", type=str, default="./results", help="path to save model"
+    )
+    parse.add_argument(
+        "--optimizer",
+        type=str,
+        default="adam",
+        help="optimizer, support rmsprop, sgd, adam",
+    )
+    parse.add_argument("--loss", type=str, default="crossentropy", help="loss function")
 
     return parse.parse_args()
 
 
-def main(tr_dataset, vl_dataset,aug=None):
+def main(tr_dataset, vl_dataset, aug=None):
     args = parse_args()
 
     ## dataset
@@ -241,57 +252,69 @@ def main(tr_dataset, vl_dataset,aug=None):
     mode = args.mode
     print("will create train_dataset")
 
-    if tr_dataset==0:
+    if tr_dataset == 0:
         train_dataset = CityScapes(mode)
-    elif tr_dataset==1 and aug==None:
+    elif tr_dataset == 1 and aug == None:
         train_dataset = gta5(mode)
-    elif tr_dataset==1 and aug== True: 
+    elif tr_dataset == 1 and aug == True:
         train_dataset = gta5(mode, aug=True)
 
     ###################################
     if len(train_dataset) == 0:
         print("Dataset is empty. Check the dataset path and filtering criteria.")
+        return
     ###################################
-    
-    print("Train_dataset created")
-    dataloader_train = DataLoader(train_dataset,
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    num_workers=args.num_workers,
-                    pin_memory=False,
-                    drop_last=True)
-    
-    if vl_dataset==0:
-        val_dataset = CityScapes(mode='val')
-    elif vl_dataset==1:
-        val_dataset = gta5(mode='val')
 
-    dataloader_val = DataLoader(val_dataset,
-                       batch_size=1,
-                       shuffle=False,
-                       num_workers=args.num_workers,
-                       drop_last=False)
+    print("Train_dataset created")
+    dataloader_train = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=False,
+        drop_last=True,
+    )
+
+    if vl_dataset == 0:
+        val_dataset = CityScapes(mode="val")
+    elif vl_dataset == 1:
+        val_dataset = gta5(mode="val")
+
+    dataloader_val = DataLoader(
+        val_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.num_workers,
+        drop_last=False,
+    )
 
     ## model
-    model = BiSeNet(backbone=args.backbone, n_classes=n_classes, pretrain_model=args.pretrain_path, use_conv_last=args.use_conv_last)
+    model = BiSeNet(
+        backbone=args.backbone,
+        n_classes=n_classes,
+        pretrain_model=args.pretrain_path,
+        use_conv_last=args.use_conv_last,
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device: ",device)
     model = model.to(device)
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
+    print("Device: ", device)
 
     ## optimizer
     # build optimizer
-    if args.optimizer == 'rmsprop':
+    if args.optimizer == "rmsprop":
         optimizer = torch.optim.RMSprop(model.parameters(), args.learning_rate)
-    elif args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), args.learning_rate, momentum=0.9, weight_decay=1e-4)
-    elif args.optimizer == 'adam':
+    elif args.optimizer == "sgd":
+        optimizer = torch.optim.SGD(
+            model.parameters(), args.learning_rate, momentum=0.9, weight_decay=1e-4
+        )
+    elif args.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
-        print('not supported optimizer \n')
+        print("not supported optimizer \n")
         return None
 
     ## train loop
@@ -299,21 +322,21 @@ def main(tr_dataset, vl_dataset,aug=None):
     # final test
     val(args, model, dataloader_val)
 
+
 if __name__ == "__main__":
     print("file is running")
 
-    ##2a 
-  #  main(0,0)
+    ##2a
+    #  main(0,0)
 
     ##2b
-    main(1,1)
+    main(1, 1)
 
     ##2c.1
-    #main(1,0)
+    # main(1,0)
 
     ##2c.2
-    #main(1,0,aug=True)
+    # main(1,0,aug=True)
 
 
-
-#modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
+# modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path

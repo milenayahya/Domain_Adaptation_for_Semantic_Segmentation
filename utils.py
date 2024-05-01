@@ -7,6 +7,9 @@ import pandas as pd
 import random
 import numbers
 import torchvision
+import os
+import logging
+logger = logging.getLogger(__file__)
 
 
 def poly_lr_scheduler(optimizer, init_lr, iter, lr_decay_iter=1,
@@ -294,3 +297,10 @@ def group_weight(weight_group, module, norm_layer, lr):
 	weight_group.append(dict(params=group_decay, lr=lr))
 	weight_group.append(dict(params=group_no_decay, weight_decay=.0, lr=lr))
 	return weight_group
+
+
+def save_checkpoint(state: dict, base_path: str, is_best: bool):
+	os.makedirs(base_path, exist_ok=True)
+	filename = os.path.join(base_path, ("latest.tar" if not is_best else "best.tar"))
+	torch.save(state, filename)
+	logger.info("Saved checkpoint")

@@ -3,6 +3,7 @@
 from model.model_stages import BiSeNet
 from Datasets.cityscapes import CityScapes
 from Datasets.gta5 import gta5
+
 import torch
 from torch.utils.data import DataLoader
 import logging
@@ -11,19 +12,26 @@ import numpy as np
 from tensorboardX import SummaryWriter
 import torch.cuda.amp as amp
 from utils import poly_lr_scheduler
-from utils import reverse_one_hot, compute_global_accuracy, fast_hist, per_class_iu
+from utils import (
+    reverse_one_hot,
+    compute_global_accuracy,
+    fast_hist,
+    per_class_iu,
+    save_checkpoint,
+)
 from tqdm import tqdm
-
+import os
 
 logger = logging.getLogger()
 
 
 def val(args, model, dataloader):
-    print('start val!')
+    print("start val!")
     with torch.no_grad():
         model.eval()
         precision_record = []
         hist = np.zeros((args.num_classes, args.num_classes))
+        pbar = tqdm(total=len(dataloader), desc="Evaluation", unit="img")
         for i, (data, label) in enumerate(dataloader):
             label = label.type(torch.LongTensor)
             data = data.cuda()
@@ -47,36 +55,48 @@ def val(args, model, dataloader):
             # predict = colour_code_segmentation(np.array(predict), label_info)
             # label = colour_code_segmentation(np.array(label), label_info)
             precision_record.append(precision)
+            pbar.update(1)
 
         precision = np.mean(precision_record)
         miou_list = per_class_iu(hist)
         miou = np.mean(miou_list)
-        print('precision per pixel for test: %.3f' % precision)
-        print('mIoU for validation: %.3f' % miou)
-        print(f'mIoU per class: {miou_list}')
+        print("precision per pixel for test: %.3f" % precision)
+        print("mIoU for validation: %.3f" % miou)
+        print(f"mIoU per class: {miou_list}")
 
         return precision, miou
 
 
 def train(args, model, optimizer, dataloader_train, dataloader_val):
-    writer = SummaryWriter(comment=''.format(args.optimizer))
+    writer = SummaryWriter(comment="{}".format(args.optimizer))
 
     scaler = amp.GradScaler()
 
     loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
     max_miou = 0
     step = 0
-    for epoch in range(args.num_epochs):
-        lr = poly_lr_scheduler(optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs)
+    start_epoch = 1
+    if args.resume and os.path.exists(args.save_model_path):
+        checkpoint = torch.load(os.path.join(args.save_model_path, "latest.tar"))
+        start_epoch = checkpoint['epoch']
+        model.load_state_dict(checkpoint['state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        max_miou = checkpoint['max_miou']
+        logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
+
+    for epoch in range(start_epoch, args.num_epochs + 1):
+        lr = poly_lr_scheduler(
+            optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs
+        )
         model.train()
         tq = tqdm(total=len(dataloader_train) * args.batch_size)
-        tq.set_description('epoch %d, lr %f' % (epoch, lr))
+        writer.add_scalar("epoch/learning_rate", lr, epoch)
+        tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
         for i, (data, label) in enumerate(dataloader_train):
-            
+
             data = data.cuda()
             label = label.long().cuda()
-            
 
             optimizer.zero_grad()
 
@@ -92,199 +112,230 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
             scaler.update()
 
             tq.update(args.batch_size)
-            tq.set_postfix(loss='%.6f' % loss)
+            tq.set_postfix(loss="%.6f" % loss)
             step += 1
-            writer.add_scalar('loss_step', loss, step)
+            writer.add_scalar("loss_step", loss, step)
             loss_record.append(loss.item())
         tq.close()
         loss_train_mean = np.mean(loss_record)
-        writer.add_scalar('epoch/loss_epoch_train', float(loss_train_mean), epoch)
-        print('loss for train : %f' % (loss_train_mean))
+        writer.add_scalar("epoch/loss_epoch_train", float(loss_train_mean), epoch)
+        print("loss for train : %f" % (loss_train_mean))
         if epoch % args.checkpoint_step == 0 and epoch != 0:
-            import os
-            if not os.path.isdir(args.save_model_path):
-                os.mkdir(args.save_model_path)
-            torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'latest.pth'))
+            save_checkpoint(
+                {
+                    "epoch": epoch + 1,
+                    "arch": str(model),
+                    "state_dict": model.state_dict(),
+                    "max_miou": max_miou,
+                    "optimizer": optimizer.state_dict(),
+                },
+                args.save_model_path,
+                False,
+            )
 
         if epoch % args.validation_step == 0 and epoch != 0:
             precision, miou = val(args, model, dataloader_val)
             if miou > max_miou:
                 max_miou = miou
-                import os
-                os.makedirs(args.save_model_path, exist_ok=True)
-                torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'best.pth'))
-            writer.add_scalar('epoch/precision_val', precision, epoch)
-            writer.add_scalar('epoch/miou val', miou, epoch)
+                save_checkpoint(
+                    {
+                        "epoch": epoch + 1,
+                        "arch": str(model),
+                        "state_dict": model.state_dict(),
+                        "max_miou": max_miou,
+                        "optimizer": optimizer.state_dict(),
+                    },
+                    args.save_model_path,
+                    True,
+                )
 
-def str2bool(v):
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            writer.add_scalar("epoch/precision_val", precision, epoch)
+            writer.add_scalar("epoch/miou val", miou, epoch)
+
+
+def str2bool(v: str) -> bool:
+    if v.lower() in ("yes", "true", "t", "y", "1"):
         return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+    elif v.lower() in ("no", "false", "f", "n", "0"):
         return False
     else:
-        raise argparse.ArgumentTypeError('Unsupported value encountered.')
+        raise argparse.ArgumentTypeError("Unsupported value encountered.")
 
 
 def parse_args():
     parse = argparse.ArgumentParser()
 
-    parse.add_argument('--mode',
-                       dest='mode',
-                       type=str,
-                       default='train',
+    parse.add_argument(
+        "--mode",
+        dest="mode",
+        type=str,
+        default="train",
     )
 
-    parse.add_argument('--backbone',
-                       dest='backbone',
-                       type=str,
-                       default='CatmodelSmall',
+    parse.add_argument(
+        "--backbone",
+        dest="backbone",
+        type=str,
+        default="CatmodelSmall",
     )
-    parse.add_argument('--pretrain_path',
-                      dest='pretrain_path',
-                      type=str,
-                      default='./STDCNet813M_73.91.tar',
+    parse.add_argument(
+        "--pretrain_path",
+        dest="pretrain_path",
+        type=str,
+        default="./STDCNet813M_73.91.tar",
     )
-    parse.add_argument('--use_conv_last',
-                       dest='use_conv_last',
-                       type=str2bool,
-                       default=False,
+    parse.add_argument(
+        "--use_conv_last",
+        dest="use_conv_last",
+        type=str2bool,
+        default=False,
     )
-    parse.add_argument('--num_epochs',
-                       type=int, default=50,
-                       help='Number of epochs to train for')
-    parse.add_argument('--epoch_start_i',
-                       type=int,
-                       default=0,
-                       help='Start counting epochs from this number')
-    parse.add_argument('--checkpoint_step',
-                       type=int,
-                       default=10,
-                       help='How often to save checkpoints (epochs)')
-    parse.add_argument('--validation_step',
-                       type=int,
-                       default=1,
-                       help='How often to perform validation (epochs)')
-    parse.add_argument('--crop_height',
-                       type=int,
-                       default=512,
-                       help='Height of cropped/resized input image to modelwork')
-    parse.add_argument('--crop_width',
-                       type=int,
-                       default=1024,
-                       help='Width of cropped/resized input image to modelwork')
-    parse.add_argument('--batch_size',
-                       type=int,
-                       default=8,
-                       help='Number of images in each batch')
-    parse.add_argument('--learning_rate',
-                        type=float,
-                        default=0.01,
-                        help='learning rate used for train')
-    parse.add_argument('--num_workers',
-                       type=int,
-                       default=4,
-                       help='num of workers')
-    parse.add_argument('--num_classes',
-                       type=int,
-                       default=19,
-                       help='num of object classes (with void)')
-    parse.add_argument('--cuda',
-                       type=str,
-                       default='0',
-                       help='GPU ids used for training')
-    parse.add_argument('--use_gpu',
-                       type=bool,
-                       default=True,
-                       help='whether to user gpu for training')
-    parse.add_argument('--save_model_path',
-                       type=str,
-                       default='./results',
-                       help='path to save model')
-    parse.add_argument('--optimizer',
-                       type=str,
-                       default='adam',
-                       help='optimizer, support rmsprop, sgd, adam')
-    parse.add_argument('--loss',
-                       type=str,
-                       default='crossentropy',
-                       help='loss function')
-
+    parse.add_argument(
+        "--num_epochs", type=int, default=50, help="Number of epochs to train for"
+    )
+    parse.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from latest checkpoint",
+    )
+    parse.add_argument(
+        "--checkpoint_step",
+        type=int,
+        default=1,
+        help="How often to save checkpoints (epochs)",
+    )
+    parse.add_argument(
+        "--validation_step",
+        type=int,
+        default=1,
+        help="How often to perform validation (epochs)",
+    )
+    parse.add_argument(
+        "--crop_height",
+        type=int,
+        default=512,
+        help="Height of cropped/resized input image to modelwork",
+    )
+    parse.add_argument(
+        "--crop_width",
+        type=int,
+        default=1024,
+        help="Width of cropped/resized input image to modelwork",
+    )
+    parse.add_argument(
+        "--batch_size", type=int, default=8, help="Number of images in each batch"
+    )
+    parse.add_argument(
+        "--learning_rate", type=float, default=0.01, help="learning rate used for train"
+    )
+    parse.add_argument("--num_workers", type=int, default=4, help="num of workers")
+    parse.add_argument(
+        "--num_classes", type=int, default=19, help="num of object classes (with void)"
+    )
+    parse.add_argument(
+        "--cuda", type=str, default="0", help="GPU ids used for training"
+    )
+    parse.add_argument(
+        "--use_gpu", type=bool, default=True, help="whether to user gpu for training"
+    )
+    parse.add_argument(
+        "--save_model_path", type=str, default="./results", help="path to save model"
+    )
+    parse.add_argument(
+        "--optimizer",
+        type=str,
+        default="adam",
+        help="optimizer, support rmsprop, sgd, adam",
+    )
+    parse.add_argument("--loss", type=str, default="crossentropy", help="loss function")
 
     return parse.parse_args()
 
 
-def main(tr_dataset, vl_dataset,aug=None):
+def main(tr_dataset, vl_dataset, aug=None):
     args = parse_args()
 
-    ## dataset
+    # dataset
     n_classes = args.num_classes
 
     mode = args.mode
 
-    if tr_dataset==0:
+    if tr_dataset == 0:
         train_dataset = CityScapes(mode)
-    elif tr_dataset==1 and aug==None:
+    elif tr_dataset == 1 and aug is None:
         train_dataset = gta5(mode)
-    elif tr_dataset==1 and aug== True: 
+    elif tr_dataset == 1 and aug:
         train_dataset = gta5(mode, aug=True)
-    
-    dataloader_train = DataLoader(train_dataset,
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    num_workers=args.num_workers,
-                    pin_memory=False,
-                    drop_last=True)
 
-    if vl_dataset==0:
-        val_dataset = CityScapes(mode='val')
-    elif vl_dataset==1:
-        val_dataset = gta5(mode='val')
+    dataloader_train = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=False,
+        drop_last=True,
+    )
 
-    dataloader_val = DataLoader(val_dataset,
-                       batch_size=1,
-                       shuffle=False,
-                       num_workers=args.num_workers,
-                       drop_last=False)
+    if vl_dataset == 0:
+        val_dataset = CityScapes(mode="val")
+    elif vl_dataset == 1:
+        val_dataset = gta5(mode="val")
 
-    ## model
-    model = BiSeNet(backbone=args.backbone, n_classes=n_classes, pretrain_model=args.pretrain_path, use_conv_last=args.use_conv_last)
+    dataloader_val = DataLoader(
+        val_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.num_workers,
+        drop_last=False,
+    )
+
+    # model
+    model = BiSeNet(
+        backbone=args.backbone,
+        n_classes=n_classes,
+        pretrain_model=args.pretrain_path,
+        use_conv_last=args.use_conv_last,
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device: ",device)
+    print("Device: ", device)
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
 
-    ## optimizer
+    # optimizer
     # build optimizer
-    if args.optimizer == 'rmsprop':
+    if args.optimizer == "rmsprop":
         optimizer = torch.optim.RMSprop(model.parameters(), args.learning_rate)
-    elif args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), args.learning_rate, momentum=0.9, weight_decay=1e-4)
-    elif args.optimizer == 'adam':
+    elif args.optimizer == "sgd":
+        optimizer = torch.optim.SGD(
+            model.parameters(), args.learning_rate, momentum=0.9, weight_decay=1e-4
+        )
+    elif args.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
-        print('not supported optimizer \n')
-        return None
+        print("not supported optimizer \n")
+        return None        
 
-    ## train loop
+    # train loop
     train(args, model, optimizer, dataloader_train, dataloader_val)
     # final test
     val(args, model, dataloader_val)
 
+
 if __name__ == "__main__":
     print("file is running")
-   
-    ##2a 
-  #  main(0,0)
 
-    ##2b
-    main(1,1)
+    # 2a
+    main(0, 0)  # Cityscapes on Cityscapes
 
-    ##2c.1
-    main(1,0)
+    # 2b
+    # main(1, 1) # GTA on GTA
 
-    ##2c.2
-    main(1,0,aug=True)
+    # 2c.1
+    # main(1, 0) # Cityscapes on GTA
 
-#modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
+    # 2c.2
+    # main(1, 0, aug=True) # Augmented Cityscapes on GTA
+
+# modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
