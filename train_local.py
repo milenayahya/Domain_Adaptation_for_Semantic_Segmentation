@@ -243,7 +243,7 @@ def parse_args():
     return parse.parse_args()
 
 
-def main(tr_dataset, vl_dataset, aug=None):
+def main(tr_dataset, vl_dataset, aug: bool=False):
     args = parse_args()
 
     ## dataset
@@ -254,9 +254,9 @@ def main(tr_dataset, vl_dataset, aug=None):
 
     if tr_dataset == 0:
         train_dataset = CityScapes(mode)
-    elif tr_dataset == 1 and aug == None:
+    elif tr_dataset == 1 and not aug:
         train_dataset = gta5(mode)
-    elif tr_dataset == 1 and aug == True:
+    elif tr_dataset == 1 and aug:
         train_dataset = gta5(mode, aug=True)
 
     ###################################

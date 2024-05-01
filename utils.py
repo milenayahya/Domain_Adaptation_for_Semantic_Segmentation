@@ -9,7 +9,7 @@ import numbers
 import torchvision
 import os
 import logging
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(__name__)
 
 
 def poly_lr_scheduler(optimizer, init_lr, iter, lr_decay_iter=1,

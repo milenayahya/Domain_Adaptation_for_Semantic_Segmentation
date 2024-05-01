@@ -13,19 +13,24 @@ import random
 from Datasets import CITYSCAPES_BASE_PATH
 from tqdm import tqdm
 from typing import Literal
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class CityScapes(Dataset):
-    def __init__(self, mode, cropSize=(512, 1024), load_mode: Literal["instant", "on_request"] = "on_request"):
+    def __init__(
+        self,
+        mode,
+        cropSize=(512, 1024),
+        load_mode: Literal["instant", "on_request"] = "on_request",
+    ):
         super(CityScapes, self).__init__()
 
         self.mode = mode
         self.load_mode = load_mode
         self.cropSize = cropSize
-        # self.root = Path("/content/Cityscapes/Cityscapes/Cityspaces")  #google colab path
         self.root = Path(CITYSCAPES_BASE_PATH)  # local path
-        # self.root = Path("./Cityscapes/Cityscapes/Cityspaces")   #local path
-        # self.root = Path("./Cityscapes/Cityscapes/Cityspaces")   #local path
-        # self.root = Path("./Cityscapes/Cityscapes/Cityspaces")   #local path
 
         if mode == "train":
             self.images_path = self.root / "images/train"
@@ -48,16 +53,13 @@ class CityScapes(Dataset):
             self.labels_path = self.root / "gtFine/val"
             self.dirs = ["frankfurt", "lindau", "munster"]
 
-        print("Checking paths:")
-        print("Images path:", self.images_path)
-        print("Labels path:", self.labels_path)
-        print("Directories:", self.dirs)
+        logger.info("Images path:", self.images_path)
+        logger.info("Labels path:", self.labels_path)
+        logger.info("Directories:", self.dirs)
 
         # mean and std of ImageNet dataset
         self.transform = v2.Compose(
             [
-                # v2.ToTensor(),
-                # v2.ToTensor(),
                 v2.ToTensor(),
                 v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             ]
@@ -84,7 +86,8 @@ class CityScapes(Dataset):
             if self.load_mode == "instant":
                 for img_path, label_path in zip(img_files, label_files):
                     img_tensor, label_tensor = self.read_image(img_path, label_path)
-            
+                    self.images.append(img_tensor)
+                    self.labels.append(label_tensor)
 
         assert (
             len(self.image_filenames) > 0
@@ -92,7 +95,9 @@ class CityScapes(Dataset):
 
         # Create tuples of (image, label) and append to samples
         self.samples.extend(zip(self.images, self.labels))
-        print(f"Cityscapes {mode} dataset initialized with {len(self.image_filenames)} images ({self.load_mode})")
+        logger.info(
+            f"Cityscapes {mode} dataset initialized with {len(self.image_filenames)} images ({self.load_mode})"
+        )
 
     def map_labels(self, label):
         # we vectorize the get function of a dictionary since we want to
@@ -104,14 +109,14 @@ class CityScapes(Dataset):
 
     def read_image(self, img_path: str, label_path: str) -> tuple:
         img_tensor, label_tensor = None, None
-        with Image.open(img_path).convert("RGB") as img:
+        with Image.open(img_path).convert("RGB") as img, Image.open(
+            label_path
+        ) as label:
             if self.mode == "train":
                 # i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
                 # img = TF.crop(img,i,j,h,w)
                 img = TF.resize(img, self.cropSize)
             img_tensor = self.transform(img)
-
-        with Image.open(label_path) as label:
 
             # crop label in same position as image
             if self.mode == "train":
@@ -135,8 +140,10 @@ class CityScapes(Dataset):
         else:
             img_path, label_path = self.image_filenames[idx], self.label_filenames[idx]
             return self.read_image(img_path, label_path)
+
     def __len__(self):
         return len(self.image_filenames)
+
 
 Label = namedtuple(
     "Label",
