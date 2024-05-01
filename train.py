@@ -1,7 +1,8 @@
 #!/usr/bin/python
 # -*- encoding: utf-8 -*-
 import logging
-from datetime import time, timedelta
+from datetime import datetime, timedelta
+import math
 from typing import Literal
 from model.model_stages import BiSeNet
 import torch
@@ -22,20 +23,25 @@ from utils import (
     save_checkpoint,
     poly_lr_scheduler,
 )
+from logs.tglog import RequestsHandler, LogstashFormatter, TGFilter
 
+tg_handler = RequestsHandler()
+formatter = LogstashFormatter()
+filter = TGFilter()
+tg_handler.setFormatter(formatter)
+tg_handler.addFilter(filter)
 logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s]:> %(message)s",
-    handlers=[logging.FileHandler("debug.log"), logging.StreamHandler()],
+    format="%(asctime)s [%(filename)s@%(funcName)s] [%(levelname)s]:> %(message)s",
+    handlers=[logging.FileHandler("logs/debug.log"), logging.StreamHandler(), tg_handler],
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 DatasetName = Literal["Cityscapes", "GTA5"]
 
 
 def val(args, model, dataloader):
-    logger.info("start val!")
     with torch.no_grad():
         model.eval()
         precision_record = []
@@ -69,9 +75,9 @@ def val(args, model, dataloader):
         precision = np.mean(precision_record)
         miou_list = per_class_iu(hist)
         miou = np.mean(miou_list)
-        logger.info("precision per pixel for test: %.3f" % precision)
-        logger.info("mIoU for validation: %.3f" % miou)
-        logger.info(f"mIoU per class: {miou_list}")
+        logger.info("Validation: precision per pixel for test: %.3f" % precision)
+        logger.info("Validation: mIoU for validation: %.3f" % miou)
+        logger.info(f"Validation: mIoU per class:\n{miou_list}")
 
         return precision, miou
 
@@ -84,11 +90,14 @@ def train(
     scaler = amp.GradScaler()
 
     loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
+    precision, miou = 0, 0
     max_miou = 0
     step = 0
     start_epoch = 1
-    if args.resume and os.path.exists(args.save_model_path):
-        checkpoint = torch.load(os.path.join(args.save_model_path, "latest.tar"))
+    checkpoint_filename = os.path.join(args.save_model_path, "latest.tar")
+    runs_execution_time = []
+    if args.resume and os.path.exists(checkpoint_filename):
+        checkpoint = torch.load(checkpoint_filename)
         start_epoch = checkpoint["epoch"]
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -100,12 +109,12 @@ def train(
     )
 
     for epoch in range(start_epoch, args.num_epochs + 1):
-        ts_start = time()
+        ts_start = datetime.today()
         lr = poly_lr_scheduler(
             optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs
         )
         model.train()
-        tq = tqdm(total=len(dataloader_train) * args.batch_size)
+        tq = tqdm(total=len(dataloader_train) * args.batch_size, unit="img")
         writer.add_scalar(f"{tensorboard_base_name}/learning_rate", lr, epoch)
         tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
@@ -137,11 +146,12 @@ def train(
         writer.add_scalar(
             f"{tensorboard_base_name}/loss_epoch_train", float(loss_train_mean), epoch
         )
-        logger.info("loss for train : %f" % (loss_train_mean))
-        ts_duration: timedelta = time() - ts_start
+        ts_duration: timedelta = datetime.today() - ts_start
+        logger.info(f"loss for train @ {epoch=}: {loss_train_mean} after {ts_duration.seconds} seconds")
+        runs_execution_time.append(ts_duration.seconds)
         writer.add_scalar(f"{tensorboard_base_name}/training_duration", ts_duration.seconds, epoch)
         if epoch % args.checkpoint_step == 0:
-            logger.info(f"Saving latest checkpoint @ {epoch=}, with {max_miou=}")
+            logger.info(f"Saving latest checkpoint @ {epoch=}, with max_miou (of latest val) = {max_miou}")
             save_checkpoint(
                 {
                     "epoch": epoch + 1,
@@ -174,6 +184,7 @@ def train(
                 f"{tensorboard_base_name}/precision_val", precision, epoch
             )
             writer.add_scalar(f"{tensorboard_base_name}/miou val", miou, epoch)
+    logger.info(f"tg:Finished training of {training_name} after {sum(runs_execution_time)/len(runs_execution_time)} seconds with a {max_miou=} and {precision=}")
 
 
 def str2bool(v: str) -> bool:
@@ -230,7 +241,7 @@ def parse_args():
     parse.add_argument(
         "--validation_step",
         type=int,
-        default=1,
+        default=5,
         help="How often to perform validation (epochs)",
     )
     parse.add_argument(
@@ -246,7 +257,7 @@ def parse_args():
         help="Width of cropped/resized input image to modelwork",
     )
     parse.add_argument(
-        "--batch_size", type=int, default=32, help="Number of images in each batch"
+        "--batch_size", type=int, default=8, help="Number of images in each batch"
     )
     parse.add_argument(
         "--learning_rate", type=float, default=0.01, help="learning rate used for train"
@@ -327,7 +338,7 @@ def main(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: ", device)
+    logger.info("Device: " + str(device))
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
@@ -363,27 +374,30 @@ def main(
 
 
 if __name__ == "__main__":
-    logger.info("file is running")
-
+    logger.info("tg:Starting MEGA training")
     # 2a
     try:
+        logger.info("tg:Starting 2A Training")
         main("Cityscapes", "Cityscapes", save_model_postfix="2A")
     except Exception as e:
-        logger.critical("Error on 2A", exc_info=e)
+        logger.critical("tg:Error on 2A", exc_info=e)
 
     # 2b
     try:
+        logger.info("tg:Starting 2B Training")
         main("GTA5", "GTA5", save_model_postfix="2B")
     except Exception as e:
-        logger.critical("Error on 2B", exc_info=e)
+        logger.critical("tg:Error on 2B", exc_info=e)
     # 2c.1
     try:
+        logger.info("tg:Starting 2C1 Training")
         main("GTA5", "Cityscapes", save_model_postfix="2C1")
     except Exception as e:
-        logger.critical("Error on 2C1", exc_info=e)
+        logger.critical("tg:Error on 2C1", exc_info=e)
     # 2c.2
     try:
+        logger.info("tg:Starting 2C2 Training")
         main("GTA5", "Cityscapes", augmentation=True, save_model_postfix="2C2")
     except Exception as e:
-        logger.critical("Error on 2C2", exc_info=e)
+        logger.critical("tg:Error on 2C2", exc_info=e)
 # modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path

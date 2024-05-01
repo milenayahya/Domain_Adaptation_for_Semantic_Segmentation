@@ -53,9 +53,9 @@ class CityScapes(Dataset):
             self.labels_path = self.root / "gtFine/val"
             self.dirs = ["frankfurt", "lindau", "munster"]
 
-        logger.info("Images path:", self.images_path)
-        logger.info("Labels path:", self.labels_path)
-        logger.info("Directories:", self.dirs)
+        logger.info("Images path: %s" % self.images_path)
+        logger.info("Labels path: %s" % self.labels_path)
+        logger.info("Directories: %s" % self.dirs)
 
         # mean and std of ImageNet dataset
         self.transform = v2.Compose(
