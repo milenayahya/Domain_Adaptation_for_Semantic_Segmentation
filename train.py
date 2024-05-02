@@ -16,6 +16,7 @@ import os
 from Datasets.cityscapes import CityScapes
 from Datasets.gta5 import gta5
 from utils import (
+    fast_compute_global_accuracy,
     reverse_one_hot,
     compute_global_accuracy,
     fast_hist,
@@ -41,7 +42,7 @@ logger.setLevel(logging.DEBUG)
 DatasetName = Literal["Cityscapes", "GTA5"]
 
 
-def val(args, model, dataloader):
+def val(args, model, dataloader) -> tuple[float, float]:
     with torch.no_grad():
         model.eval()
         precision_record = []
@@ -63,7 +64,7 @@ def val(args, model, dataloader):
             label = np.array(label.cpu())
 
             # compute per pixel accuracy
-            precision = compute_global_accuracy(predict, label)
+            precision = fast_compute_global_accuracy(predict, label)
             hist += fast_hist(label.flatten(), predict.flatten(), args.num_classes)
 
             # there is no need to transform the one-hot array to visual RGB array
