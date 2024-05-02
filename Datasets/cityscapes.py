@@ -113,15 +113,13 @@ class CityScapes(Dataset):
             label_path
         ) as label:
             if self.mode == "train":
-                # i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
-                # img = TF.crop(img,i,j,h,w)
-                img = TF.resize(img, self.cropSize)
+                i,j,h,w = v2.RandomCrop.get_params(img, self.cropSize)
+                img = TF.crop(img,i,j,h,w)
+                label= TF.crop(label,i,j,h,w)
+                # img = TF.resize(img, self.cropSize)
+                # label = TF.resize(label, self.cropSize)
             img_tensor = self.transform(img)
 
-            # crop label in same position as image
-            if self.mode == "train":
-                # label= TF.crop(label,i,j,h,w)
-                label = TF.resize(label, self.cropSize)
             label_array = np.array(label)
             label_mapped = self.map_labels(label_array)
 

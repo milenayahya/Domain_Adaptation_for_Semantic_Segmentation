@@ -24,7 +24,7 @@ class gta5(Dataset):
         self,
         mode: Literal["train", "val"],
         aug: bool = False,
-        cropSize: tuple[int, int] = (512, 1024),
+        cropSize: tuple[int, int] = (720, 1280),
         load_mode: Literal["instant", "on_request"] = "on_request",
     ):
         super(gta5, self).__init__()
@@ -56,27 +56,13 @@ class gta5(Dataset):
             ]
         )
 
+        # fmt: off
         self.id_to_trainid = {
-            7: 0,
-            8: 1,
-            11: 2,
-            12: 3,
-            13: 4,
-            17: 5,
-            19: 6,
-            20: 7,
-            21: 8,
-            22: 9,
-            23: 10,
-            24: 11,
-            25: 12,
-            26: 13,
-            27: 14,
-            28: 15,
-            31: 16,
-            32: 17,
-            33: 18,
+            7: 0,  8: 1,  11: 2,  12: 3,  13: 4,  17: 5,  19: 6, 
+            20: 7,  21: 8,  22: 9,  23: 10,  24: 11,  25: 12,  26: 13, 
+            27: 14,  28: 15,  31: 16,  32: 17,  33: 18, 
         }
+        # fmt: on
 
         self.images = []
         self.labels = []
@@ -110,12 +96,12 @@ class gta5(Dataset):
             label_path
         ) as label:
             if self.mode == "train":
-                # i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
-                # img = TF.crop(img,i,j,h,w)
-                # label= TF.crop(label,i,j,h,w)
+                i, j, h, w = v2.RandomCrop.get_params(img, self.cropSize)
+                img = TF.crop(img, i, j, h, w)
+                label = TF.crop(label, i, j, h, w)
 
-                img = TF.resize(img, self.cropSize)
-                label = TF.resize(label, self.cropSize)
+                # img = TF.resize(img, self.cropSize)
+                # label = TF.resize(label, self.cropSize)
 
                 ## data augmentation if training
                 if self.aug:
