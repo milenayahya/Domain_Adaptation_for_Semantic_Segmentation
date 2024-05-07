@@ -123,6 +123,8 @@ class gta5(Dataset):
 
 if __name__ == "__main__":
 
-    train_dataset = gta5("train", aug=True)
-    img, lbl = train_dataset[4]
-    print(img, lbl)
+    train_dataset = gta5("train")
+    ti, tl = train_dataset[4]
+    val_dataset = gta5("val")
+    vi, vl = val_dataset[4]
+    

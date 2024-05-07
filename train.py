@@ -315,11 +315,11 @@ def main(
 
     if training_ds_name == "Cityscapes":
         train_dataset = CityScapes("train")
-    elif training_ds_name == "GTA5" and not augmentation:
-        train_dataset = gta5("train")
-    elif training_ds_name == "GTA5" and augmentation:
-        train_dataset = gta5("train", aug=True)
-
+    elif training_ds_name == "GTA5":
+        train_dataset = gta5("train", aug=augmentation)
+    else:
+        raise ValueError("Dataset non valido")
+    
     dataloader_train = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -333,6 +333,9 @@ def main(
         val_dataset = CityScapes(mode="val")
     elif validation_ds_name == "GTA5":
         val_dataset = gta5(mode="val")
+    else:
+        raise ValueError("Dataset non valido")
+
 
     dataloader_val = DataLoader(
         val_dataset,
@@ -391,6 +394,7 @@ def main(
     # final test
     if args.mode != "train" or args.use_best:
         checkpoint_filename = os.path.join(args.save_model_path, "best.tar")
+        logger.info(f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}")
         # Load Best before final evaluation
         if os.path.exists(checkpoint_filename):
             checkpoint = torch.load(checkpoint_filename)
@@ -402,7 +406,7 @@ def main(
 
 
 if __name__ == "__main__":
-    logger.info("tg:Starting MEGA training")
+    # logger.info("tg:Starting MEGA training")
     # 2a
     try:
         logger.info("tg:Starting 2A Training")
@@ -411,25 +415,25 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical("tg:Error on 2A", exc_info=e)
 
-    # 2b
-    try:
-        logger.info("tg:Starting 2B Training")
-        precision_2b, miou_2b = main("GTA5", "GTA5", save_model_postfix="2B")
-        logger.info(f"tg:2B Results: Precision={precision_2b} Mean IoU={miou_2b}")
-    except Exception as e:
-        logger.critical("tg:Error on 2B", exc_info=e)
-    # 2c.1
-    try:
-        logger.info("tg:Starting 2C1 Training")
-        precision_2c1, miou_2c1 = main("GTA5", "Cityscapes", save_model_postfix="2C1")
-        logger.info(f"tg:2C1 Results: Precision={precision_2c1} Mean IoU={miou_2c1}")
-    except Exception as e:
-        logger.critical("tg:Error on 2C1", exc_info=e)
-    # 2c.2
-    try:
-        logger.info("tg:Starting 2C2 Training")
-        precision_2c2, miou_2c2 = main("GTA5", "Cityscapes", augmentation=True, save_model_postfix="2C2")
-        logger.info(f"tg:2C2 Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
-    except Exception as e:
-        logger.critical("tg:Error on 2C2", exc_info=e)
+    # # 2b
+    # try:
+    #     logger.info("tg:Starting 2B Training")
+    #     precision_2b, miou_2b = main("GTA5", "GTA5", save_model_postfix="2B")
+    #     logger.info(f"tg:2B Results: Precision={precision_2b} Mean IoU={miou_2b}")
+    # except Exception as e:
+    #     logger.critical("tg:Error on 2B", exc_info=e)
+    # # 2c.1
+    # try:
+    #     logger.info("tg:Starting 2C1 Training")
+    #     precision_2c1, miou_2c1 = main("GTA5", "Cityscapes", save_model_postfix="2C1")
+    #     logger.info(f"tg:2C1 Results: Precision={precision_2c1} Mean IoU={miou_2c1}")
+    # except Exception as e:
+    #     logger.critical("tg:Error on 2C1", exc_info=e)
+    # # 2c.2
+    # try:
+    #     logger.info("tg:Starting 2C2 Training")
+    #     precision_2c2, miou_2c2 = main("GTA5", "Cityscapes", augmentation=True, save_model_postfix="2C2")
+    #     logger.info(f"tg:2C2 Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
+    # except Exception as e:
+    #     logger.critical("tg:Error on 2C2", exc_info=e)
 # modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
