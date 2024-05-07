@@ -1,9 +1,9 @@
-from typing import Literal
+from typing import Literal, Optional
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
-from torchvision import transforms as v2
-import torchvision.transforms.functional as TF
+from torchvision.transforms import v2
+import torchvision.transforms.v2.functional as TF
 from pathlib import Path
 import numpy as np
 from Datasets.augmentation import augment
@@ -19,6 +19,7 @@ class gta5(Dataset):
     aug: bool
     cropSize: tuple[int, int]
     load_mode: Literal["instant", "on_request"]
+    trasnform: callable
 
     def __init__(
         self,
@@ -26,6 +27,7 @@ class gta5(Dataset):
         aug: bool = False,
         cropSize: tuple[int, int] = (720, 1280),
         load_mode: Literal["instant", "on_request"] = "on_request",
+        transformations: Optional[callable] = None,
     ):
         super(gta5, self).__init__()
 
@@ -49,13 +51,15 @@ class gta5(Dataset):
         logger.info("Labels path: %s" % self.labels_path)
 
         # mean and std of ImageNet dataset
-        self.transform = v2.Compose(
-            [
-                v2.ToTensor(),
-                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ]
-        )
-
+        if transformations is None:
+            self.transform = v2.Compose(
+                [
+                    v2.ToTensor(),
+                    v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                ]
+            )
+        else:
+            self.transform = transformations
         # fmt: off
         self.id_to_trainid = {
             7: 0,  8: 1,  11: 2,  12: 3,  13: 4,  17: 5,  19: 6, 
@@ -99,17 +103,13 @@ class gta5(Dataset):
                 i, j, h, w = v2.RandomCrop.get_params(img, self.cropSize)
                 img = TF.crop(img, i, j, h, w)
                 label = TF.crop(label, i, j, h, w)
-
-                # img = TF.resize(img, self.cropSize)
-                # label = TF.resize(label, self.cropSize)
-
-                ## data augmentation if training
                 if self.aug:
                     img, label = augment(img, label)
 
             img_tensor = self.transform(img)
 
-            label = np.array(label)
+            label = np.asarray(label, np.float32)
+
             label_copy = 255 * np.ones(label.shape, dtype=np.float32)
             for k, v in self.id_to_trainid.items():
                 label_copy[label == k] = v
