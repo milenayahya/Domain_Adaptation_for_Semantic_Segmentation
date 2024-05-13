@@ -1,32 +1,52 @@
 #!/usr/bin/python
 # -*- encoding: utf-8 -*-
+import logging
+from datetime import datetime, timedelta
+import math
+from typing import Literal
 from model.model_stages import BiSeNet
-from Datasets.cityscapes import CityScapes
-from Datasets.gta5 import gta5
-
 import torch
 from torch.utils.data import DataLoader
-import logging
 import argparse
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch.cuda.amp as amp
-from utils import poly_lr_scheduler
+from tqdm import tqdm
+import os
+from Datasets.cityscapes import CityScapes
+from Datasets.gta5 import gta5
 from utils import (
+    fast_compute_global_accuracy,
     reverse_one_hot,
     compute_global_accuracy,
     fast_hist,
     per_class_iu,
     save_checkpoint,
+    poly_lr_scheduler,
 )
-from tqdm import tqdm
-import os
+from logs.tglog import RequestsHandler, LogstashFormatter, TGFilter
 
-logger = logging.getLogger()
+tg_handler = RequestsHandler()
+formatter = LogstashFormatter()
+filter = TGFilter()
+tg_handler.setFormatter(formatter)
+tg_handler.addFilter(filter)
+logging.basicConfig(
+    format="%(asctime)s [%(filename)s@%(funcName)s] [%(levelname)s]:> %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(os.path.dirname(__file__), "logs/debug.log")),
+        logging.StreamHandler(),
+        tg_handler,
+    ],
+)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
-def val(args, model, dataloader):
-    print("start val!")
+DatasetName = Literal["Cityscapes", "GTA5"]
+
+
+def val(args, model, dataloader) -> tuple[float, float]:
     with torch.no_grad():
         model.eval()
         precision_record = []
@@ -48,7 +68,7 @@ def val(args, model, dataloader):
             label = np.array(label.cpu())
 
             # compute per pixel accuracy
-            precision = compute_global_accuracy(predict, label)
+            precision = fast_compute_global_accuracy(predict, label)
             hist += fast_hist(label.flatten(), predict.flatten(), args.num_classes)
 
             # there is no need to transform the one-hot array to visual RGB array
@@ -60,37 +80,44 @@ def val(args, model, dataloader):
         precision = np.mean(precision_record)
         miou_list = per_class_iu(hist)
         miou = np.mean(miou_list)
-        print("precision per pixel for test: %.3f" % precision)
-        print("mIoU for validation: %.3f" % miou)
-        print(f"mIoU per class: {miou_list}")
-
+        logger.info("Validation: precision per pixel for test: %.3f" % precision)
+        logger.info("Validation: mIoU for validation: %.3f" % miou)
+        logger.info(f"Validation: mIoU per class:\n{miou_list}")
         return precision, miou
 
 
-def train(args, model, optimizer, dataloader_train, dataloader_val):
-    writer = SummaryWriter(comment="{}".format(args.optimizer))
+def train(
+    args, model, optimizer, dataloader_train, dataloader_val, training_name: str = None
+):
+    writer = SummaryWriter(comment=f"{training_name}{args.optimizer}")
 
     scaler = amp.GradScaler()
 
     loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
+    precision, miou = 0, 0
     max_miou = 0
     step = 0
     start_epoch = 1
-    if args.resume and os.path.exists(args.save_model_path):
-        checkpoint = torch.load(os.path.join(args.save_model_path, "latest.tar"))
-        start_epoch = checkpoint['epoch']
-        model.load_state_dict(checkpoint['state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        max_miou = checkpoint['max_miou']
+    checkpoint_filename = os.path.join(args.save_model_path, "latest.tar")
+    runs_execution_time = []
+    if args.resume and os.path.exists(checkpoint_filename):
+        checkpoint = torch.load(checkpoint_filename)
+        start_epoch = checkpoint["epoch"]
+        model.load_state_dict(checkpoint["state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        max_miou = checkpoint["max_miou"]
         logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
 
+    tensorboard_base_name = "epoch/"
+    best_epoch = 0
     for epoch in range(start_epoch, args.num_epochs + 1):
+        ts_start = datetime.today()
         lr = poly_lr_scheduler(
-            optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs
-        )
+            optimizer, args.learning_rate, iter=(epoch - 1), max_iter=args.num_epochs
+        )  # epoch-1 because we are now starting from 1
         model.train()
-        tq = tqdm(total=len(dataloader_train) * args.batch_size)
-        writer.add_scalar("epoch/learning_rate", lr, epoch)
+        tq = tqdm(total=len(dataloader_train) * args.batch_size, unit="img")
+        writer.add_scalar(f"{tensorboard_base_name}/learning_rate", lr, epoch)
         tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
         for i, (data, label) in enumerate(dataloader_train):
@@ -114,13 +141,29 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
             tq.update(args.batch_size)
             tq.set_postfix(loss="%.6f" % loss)
             step += 1
-            writer.add_scalar("loss_step", loss, step)
+            writer.add_scalar("step/loss", loss, step)
             loss_record.append(loss.item())
         tq.close()
         loss_train_mean = np.mean(loss_record)
-        writer.add_scalar("epoch/loss_epoch_train", float(loss_train_mean), epoch)
-        print("loss for train : %f" % (loss_train_mean))
-        if epoch % args.checkpoint_step == 0 and epoch != 0:
+        writer.add_scalar(
+            f"{tensorboard_base_name}/loss_epoch_train", float(loss_train_mean), epoch
+        )
+        ts_duration: timedelta = datetime.today() - ts_start
+        logger.info(
+            f"loss for train @ {epoch=}: {loss_train_mean} after {ts_duration.seconds} seconds"
+        )
+        runs_execution_time.append(ts_duration.seconds)
+        writer.add_scalar(
+            f"{tensorboard_base_name}/training_duration",
+            ts_duration.seconds,
+            epoch,
+            display_name="Training Duration",
+            summary_description="seconds",
+        )
+        if epoch % args.checkpoint_step == 0:
+            logger.info(
+                f"Saving latest checkpoint @ {epoch=}, with max_miou (of latest val) = {max_miou}"
+            )
             save_checkpoint(
                 {
                     "epoch": epoch + 1,
@@ -133,10 +176,21 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
                 False,
             )
 
-        if epoch % args.validation_step == 0 and epoch != 0:
+        if epoch % args.validation_step == 0:
             precision, miou = val(args, model, dataloader_val)
+            writer.add_scalar(
+                f"{tensorboard_base_name}/precision",
+                precision,
+                epoch,
+                display_name="Precision",
+            )
+            writer.add_scalar(
+                f"{tensorboard_base_name}/miou", miou, epoch, display_name="Mean IoU"
+            )
             if miou > max_miou:
                 max_miou = miou
+                best_epoch = epoch
+                logger.info(f"Saving best checkpoint @ {epoch=}, with {max_miou=}")
                 save_checkpoint(
                     {
                         "epoch": epoch + 1,
@@ -148,9 +202,9 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
                     args.save_model_path,
                     True,
                 )
-
-            writer.add_scalar("epoch/precision_val", precision, epoch)
-            writer.add_scalar("epoch/miou val", miou, epoch)
+    logger.info(
+        f"tg:Finished training of {training_name} after {sum(runs_execution_time)/len(runs_execution_time)} seconds. Best was reached @ {best_epoch} epoch"
+    )
 
 
 def str2bool(v: str) -> bool:
@@ -170,6 +224,7 @@ def parse_args():
         dest="mode",
         type=str,
         default="train",
+        choices=["train", "val_with_best"],
     )
 
     parse.add_argument(
@@ -199,6 +254,11 @@ def parse_args():
         help="Resume from latest checkpoint",
     )
     parse.add_argument(
+        "--use_best",
+        action="store_true",
+        help="Use best model for final validation",
+    )
+    parse.add_argument(
         "--checkpoint_step",
         type=int,
         default=1,
@@ -207,20 +267,8 @@ def parse_args():
     parse.add_argument(
         "--validation_step",
         type=int,
-        default=1,
+        default=5,
         help="How often to perform validation (epochs)",
-    )
-    parse.add_argument(
-        "--crop_height",
-        type=int,
-        default=512,
-        help="Height of cropped/resized input image to modelwork",
-    )
-    parse.add_argument(
-        "--crop_width",
-        type=int,
-        default=1024,
-        help="Width of cropped/resized input image to modelwork",
     )
     parse.add_argument(
         "--batch_size", type=int, default=8, help="Number of images in each batch"
@@ -248,11 +296,16 @@ def parse_args():
         help="optimizer, support rmsprop, sgd, adam",
     )
     parse.add_argument("--loss", type=str, default="crossentropy", help="loss function")
-
     return parse.parse_args()
 
 
-def main(tr_dataset, vl_dataset, aug=None):
+def main(
+    training_ds_name: DatasetName,
+    validation_ds_name: DatasetName,
+    *,
+    augmentation: bool = False,
+    save_model_postfix: str = "",
+) -> tuple[float, float]:
     args = parse_args()
 
     # dataset
@@ -260,13 +313,13 @@ def main(tr_dataset, vl_dataset, aug=None):
 
     mode = args.mode
 
-    if tr_dataset == 0:
-        train_dataset = CityScapes(mode)
-    elif tr_dataset == 1 and aug is None:
-        train_dataset = gta5(mode)
-    elif tr_dataset == 1 and aug:
-        train_dataset = gta5(mode, aug=True)
-
+    if training_ds_name == "Cityscapes":
+        train_dataset = CityScapes("train")
+    elif training_ds_name == "GTA5":
+        train_dataset = gta5("train", aug=augmentation)
+    else:
+        raise ValueError("Dataset non valido")
+    
     dataloader_train = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -276,10 +329,13 @@ def main(tr_dataset, vl_dataset, aug=None):
         drop_last=True,
     )
 
-    if vl_dataset == 0:
+    if validation_ds_name == "Cityscapes":
         val_dataset = CityScapes(mode="val")
-    elif vl_dataset == 1:
+    elif validation_ds_name == "GTA5":
         val_dataset = gta5(mode="val")
+    else:
+        raise ValueError("Dataset non valido")
+
 
     dataloader_val = DataLoader(
         val_dataset,
@@ -298,7 +354,7 @@ def main(tr_dataset, vl_dataset, aug=None):
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device: ", device)
+    logger.info("Device: " + str(device))
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
@@ -314,28 +370,70 @@ def main(tr_dataset, vl_dataset, aug=None):
     elif args.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
-        print("not supported optimizer \n")
-        return None        
+        logger.critical("not supported optimizer")
+        return None
+
+    if save_model_postfix == "2C1":
+        # IF task 2c.1 -> Re use model of 2b and valuate only on Cityscape directly
+        args.mode = "val_with_best"
+        args.save_model_postfix = "2B"
+
+    if save_model_postfix != "":
+        args.save_model_path = os.path.join(args.save_model_path, save_model_postfix)
 
     # train loop
-    train(args, model, optimizer, dataloader_train, dataloader_val)
+    if args.mode == "train":
+        train(
+            args,
+            model,
+            optimizer,
+            dataloader_train,
+            dataloader_val,
+            training_name=save_model_postfix,
+        )
     # final test
-    val(args, model, dataloader_val)
+    if args.mode != "train" or args.use_best:
+        checkpoint_filename = os.path.join(args.save_model_path, "best.tar")
+        logger.info(f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}")
+        # Load Best before final evaluation
+        if os.path.exists(checkpoint_filename):
+            checkpoint = torch.load(checkpoint_filename)
+            start_epoch = checkpoint["epoch"]
+            model.load_state_dict(checkpoint["state_dict"])
+            logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
+
+    return val(args, model, dataloader_val)
 
 
 if __name__ == "__main__":
-    print("file is running")
-
+    # logger.info("tg:Starting MEGA training")
     # 2a
-    main(0, 0)  # Cityscapes on Cityscapes
+    try:
+        logger.info("tg:Starting 2A Training")
+        precision_2a, miou_2a = main("Cityscapes", "Cityscapes", save_model_postfix="2A")
+        logger.info(f"tg:2A Results: Precision={precision_2a} Mean IoU={miou_2a}")
+    except Exception as e:
+        logger.critical("tg:Error on 2A", exc_info=e)
 
-    # 2b
-    # main(1, 1) # GTA on GTA
-
-    # 2c.1
-    # main(1, 0) # Cityscapes on GTA
-
-    # 2c.2
-    # main(1, 0, aug=True) # Augmented Cityscapes on GTA
-
+    # # 2b
+    # try:
+    #     logger.info("tg:Starting 2B Training")
+    #     precision_2b, miou_2b = main("GTA5", "GTA5", save_model_postfix="2B")
+    #     logger.info(f"tg:2B Results: Precision={precision_2b} Mean IoU={miou_2b}")
+    # except Exception as e:
+    #     logger.critical("tg:Error on 2B", exc_info=e)
+    # # 2c.1
+    # try:
+    #     logger.info("tg:Starting 2C1 Training")
+    #     precision_2c1, miou_2c1 = main("GTA5", "Cityscapes", save_model_postfix="2C1")
+    #     logger.info(f"tg:2C1 Results: Precision={precision_2c1} Mean IoU={miou_2c1}")
+    # except Exception as e:
+    #     logger.critical("tg:Error on 2C1", exc_info=e)
+    # # 2c.2
+    # try:
+    #     logger.info("tg:Starting 2C2 Training")
+    #     precision_2c2, miou_2c2 = main("GTA5", "Cityscapes", augmentation=True, save_model_postfix="2C2")
+    #     logger.info(f"tg:2C2 Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
+    # except Exception as e:
+    #     logger.critical("tg:Error on 2C2", exc_info=e)
 # modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path

@@ -150,10 +150,10 @@ class STDCNet813(nn.Module):
     def init_weight(self, pretrain_model):
 
         # training with GPU
-        #state_dict = torch.load(pretrain_model)["state_dict"]
+        state_dict = torch.load(pretrain_model)["state_dict"]
 
         #training with CPU only
-        state_dict = torch.load(pretrain_model, map_location=lambda storage, loc: storage)["state_dict"]
+        # state_dict = torch.load(pretrain_model, map_location=lambda storage, loc: storage)["state_dict"]
 
         self_state_dict = self.state_dict()
         for k, v in state_dict.items():

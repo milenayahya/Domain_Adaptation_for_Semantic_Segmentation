@@ -3,13 +3,14 @@ import torch
 from torch.nn import functional as F
 from PIL import Image
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import random
 import numbers
 import torchvision
 import os
 import logging
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(__name__)
 
 
 def poly_lr_scheduler(optimizer, init_lr, iter, lr_decay_iter=1,
@@ -161,6 +162,12 @@ def compute_global_accuracy(pred, label):
 		if pred[i] == label[i]:
 			count = count + 1.0
 	return float(count) / float(total)
+
+def fast_compute_global_accuracy(pred: npt.NDArray, label: npt.NDArray):
+	pred = pred.flatten()
+	label = label.flatten()
+	accuracy = (pred == label).sum() / len(label)
+	return accuracy
 
 def fast_hist(a, b, n):
 	'''

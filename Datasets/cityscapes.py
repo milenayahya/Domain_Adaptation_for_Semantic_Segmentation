@@ -3,140 +3,18 @@
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
-from torchvision import transforms as v2
-import torchvision.transforms.functional as TF
+from torchvision.transforms import v2
+import torchvision.transforms.v2.functional as TF
 from pathlib import Path
 from collections import namedtuple
 import numpy as np
-import os.path
-import random
 from Datasets import CITYSCAPES_BASE_PATH
 from tqdm import tqdm
-from typing import Literal
+from typing import Literal, Optional, Union
+import logging
 
-class CityScapes(Dataset):
-    def __init__(self, mode, cropSize=(512, 1024), load_mode: Literal["instant", "on_request"] = "on_request"):
-        super(CityScapes, self).__init__()
+logger = logging.getLogger(__name__)
 
-        self.mode = mode
-        self.load_mode = load_mode
-        self.cropSize = cropSize
-        # self.root = Path("/content/Cityscapes/Cityscapes/Cityspaces")  #google colab path
-        self.root = Path(CITYSCAPES_BASE_PATH)  # local path
-        # self.root = Path("./Cityscapes/Cityscapes/Cityspaces")   #local path
-        # self.root = Path("./Cityscapes/Cityscapes/Cityspaces")   #local path
-        # self.root = Path("./Cityscapes/Cityscapes/Cityspaces")   #local path
-
-        if mode == "train":
-            self.images_path = self.root / "images/train"
-            self.labels_path = self.root / "gtFine/train"
-            self.dirs = [
-                "hanover",
-                "jena",
-                "krefeld",
-                "monchengladbach",
-                "strasbourg",
-                "stuttgart",
-                "tubingen",
-                "ulm",
-                "weimar",
-                "zurich",
-            ]
-
-        if mode == "val":
-            self.images_path = self.root / "images/val"
-            self.labels_path = self.root / "gtFine/val"
-            self.dirs = ["frankfurt", "lindau", "munster"]
-
-        print("Checking paths:")
-        print("Images path:", self.images_path)
-        print("Labels path:", self.labels_path)
-        print("Directories:", self.dirs)
-
-        # mean and std of ImageNet dataset
-        self.transform = v2.Compose(
-            [
-                # v2.ToTensor(),
-                # v2.ToTensor(),
-                v2.ToTensor(),
-                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ]
-        )
-
-        self.samples = []
-        self.images = []
-        self.labels = []
-        self.image_filenames = []
-        self.label_filenames = []
-
-        for dir_name in tqdm(
-            self.dirs, desc=f"Parsing Cityscapes ({mode})", unit="dir", leave=False
-        ):
-
-            img_dir_path = self.images_path / dir_name
-            label_dir_path = self.labels_path / dir_name
-            img_files = sorted(img_dir_path.glob("*.png"))
-            label_files = sorted(label_dir_path.glob("*labelTrainIds.png"))
-
-            self.image_filenames += img_files
-            self.label_filenames += label_files
-
-            if self.load_mode == "instant":
-                for img_path, label_path in zip(img_files, label_files):
-                    img_tensor, label_tensor = self.read_image(img_path, label_path)
-            
-
-        assert (
-            len(self.image_filenames) > 0
-        ), f"Seems like Dataset is Missing {self.images_path=} {self.root=}"
-
-        # Create tuples of (image, label) and append to samples
-        self.samples.extend(zip(self.images, self.labels))
-        print(f"Cityscapes {mode} dataset initialized with {len(self.image_filenames)} images ({self.load_mode})")
-
-    def map_labels(self, label):
-        # we vectorize the get function of a dictionary since we want to
-        # pass as input a label image, which is an array of labelIds
-        mapped_labels = np.vectorize(id_to_trainId.get)(
-            label, 255
-        )  # Use 255 as default for ignored labels
-        return mapped_labels
-
-    def read_image(self, img_path: str, label_path: str) -> tuple:
-        img_tensor, label_tensor = None, None
-        with Image.open(img_path).convert("RGB") as img:
-            if self.mode == "train":
-                # i,j,h,w = v2.RandomCrop.get_params(img, cropSize)
-                # img = TF.crop(img,i,j,h,w)
-                img = TF.resize(img, self.cropSize)
-            img_tensor = self.transform(img)
-
-        with Image.open(label_path) as label:
-
-            # crop label in same position as image
-            if self.mode == "train":
-                # label= TF.crop(label,i,j,h,w)
-                label = TF.resize(label, self.cropSize)
-            label_array = np.array(label)
-            label_mapped = self.map_labels(label_array)
-
-            label_tensor = torch.from_numpy(
-                label_mapped
-            ).long()  # to perserve int format
-            label_tensor = label_tensor.unsqueeze(0)
-
-        return img_tensor, label_tensor
-
-    def __getitem__(self, idx):
-        if self.load_mode == "instant":
-            image = self.images[idx]
-            label = self.labels[idx]
-            return image, label
-        else:
-            img_path, label_path = self.image_filenames[idx], self.label_filenames[idx]
-            return self.read_image(img_path, label_path)
-    def __len__(self):
-        return len(self.image_filenames)
 
 Label = namedtuple(
     "Label",
@@ -200,7 +78,216 @@ id_to_trainId = {
 }
 
 
+class CityScapes(Dataset):
+
+    mode: Literal["train", "val"]
+    train_id_to_color = [
+        c.color for c in labels_dict if (c.trainId != -1 and c.trainId != 255)
+    ]
+    train_id_to_color.append([0, 0, 0])
+    train_id_to_color = np.array(train_id_to_color)
+    id_to_train_id = np.array([c.trainId for c in labels_dict])
+    id_to_color = np.array([c.color for c in labels_dict])
+
+    def __init__(
+        self,
+        mode: Literal["train", "val"],
+        cropSize=(512, 1024),
+        load_mode: Literal["instant", "on_request"] = "on_request",
+        transformations: Optional[callable] = None,
+    ):
+        super(CityScapes, self).__init__()
+
+        self.mode = mode
+        self.load_mode = load_mode
+        self.cropSize = cropSize
+        self.root = Path(CITYSCAPES_BASE_PATH)  # local path
+
+        if mode == "train":
+            self.images_path = self.root / "images/train"
+            self.labels_path = self.root / "gtFine/train"
+            self.dirs = [
+                "hanover",
+                "jena",
+                "krefeld",
+                "monchengladbach",
+                "strasbourg",
+                "stuttgart",
+                "tubingen",
+                "ulm",
+                "weimar",
+                "zurich",
+            ]
+
+        if mode == "val":
+            self.images_path = self.root / "images/val"
+            self.labels_path = self.root / "gtFine/val"
+            self.dirs = ["frankfurt", "lindau", "munster"]
+
+        logger.info("Images path: %s" % self.images_path)
+        logger.info("Labels path: %s" % self.labels_path)
+        logger.info("Directories: %s" % self.dirs)
+
+        # mean and std of ImageNet dataset
+        if transformations is None:
+            self.transform = v2.Compose(
+                [
+                    # v2.ToTensor(),
+                    v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                ]
+            )
+        else:
+            self.transform = transformations
+
+        self.samples = []
+        self.images = []
+        self.labels = []
+        self.image_filenames = []
+        self.label_filenames = []
+
+        for dir_name in tqdm(
+            self.dirs, desc=f"Parsing Cityscapes ({mode})", unit="dir", leave=False
+        ):
+
+            img_dir_path = self.images_path / dir_name
+            label_dir_path = self.labels_path / dir_name
+            img_files = sorted(img_dir_path.glob("*.png"))
+            label_files = sorted(label_dir_path.glob("*labelTrainIds.png"))
+
+            self.image_filenames += img_files
+            self.label_filenames += label_files
+
+            if self.load_mode == "instant":
+                for img_path, label_path in zip(img_files, label_files):
+                    img_tensor, label_tensor = self.read_image(img_path, label_path)
+                    self.images.append(img_tensor)
+                    self.labels.append(label_tensor)
+
+        assert (
+            len(self.image_filenames) > 0
+        ), f"Seems like Dataset is Missing {self.images_path=} {self.root=}"
+
+        # Create tuples of (image, label) and append to samples
+        self.samples.extend(zip(self.images, self.labels))
+        logger.info(
+            f"Cityscapes {mode} dataset initialized with {len(self.image_filenames)} images ({self.load_mode})"
+        )
+
+    def map_labels(self, label):
+        # we vectorize the get function of a dictionary since we want to
+        # pass as input a label image, which is an array of labelIds
+        mapped_labels = np.vectorize(id_to_trainId.get)(
+            label, 255
+        )  # Use 255 as default for ignored labels
+        return mapped_labels
+
+    def read_image(self, img_path: str, label_path: str) -> tuple:
+        img = Image.open(img_path).convert("RGB")
+        tmp = np.array(Image.open(label_path), dtype=np.uint8)
+        tmp = CityScapes.encode(tmp)
+        target = Image.fromarray(tmp)
+        return img, target
+
+    def __getitem__(self, idx):
+        if self.load_mode == "instant":
+            image = self.images[idx]
+            label = self.labels[idx]
+        else:
+            img_path, label_path = self.image_filenames[idx], self.label_filenames[idx]
+            image, label = self.read_image(img_path, label_path)
+
+        if self.mode == "train":
+            return self._transformation_train(image, label)
+        else:
+            return self._transformation_val(image, label)
+
+    def _transformation_train(self, image, label) -> tuple:
+        pre_shared_transformations = []
+        post_shared_transformations = []
+        img_transformations = (
+            pre_shared_transformations
+            + [
+                v2.Resize(self.cropSize, v2.InterpolationMode.BILINEAR),
+                v2.ToImage(),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ]
+            + post_shared_transformations
+        )
+        label_transformations = (
+            pre_shared_transformations
+            + [v2.Resize(self.cropSize, v2.InterpolationMode.NEAREST), v2.PILToTensor()]
+            + post_shared_transformations
+        )
+
+        if len(img_transformations) > 0:
+            transform_img = v2.Compose(img_transformations)
+        else:
+            transform_img = lambda it: it
+
+        if len(label_transformations) > 0:
+            transform_lbl = v2.Compose(label_transformations)
+        else:
+            transform_lbl = lambda it: it
+
+        return transform_img(image), transform_lbl(label)
+
+    def _transformation_val(self, image, label) -> tuple:
+        pre_shared_transformations = []
+        post_shared_transformations = []
+        img_transformations = (
+            pre_shared_transformations
+            + [
+                v2.ToImage(),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ]
+            + post_shared_transformations
+        )
+
+        label_transformations = (
+            pre_shared_transformations
+            + [v2.PILToTensor()]
+            + post_shared_transformations
+        )
+
+        if len(img_transformations) > 0:
+            transform_img = v2.Compose(img_transformations)
+        else:
+            transform_img = lambda it: it
+
+        if len(label_transformations) > 0:
+            transform_lbl = v2.Compose(label_transformations)
+        else:
+            transform_lbl = lambda it: it
+
+        return transform_img(image), transform_lbl(label)
+
+    @classmethod
+    def encode(cls, mask):
+        # Put all void classes to zero
+        classes_to_void = [
+            v.id for v in labels_dict if v.trainId == 255 or v.trainId == -1
+        ]
+        for void_class in classes_to_void:
+            mask[mask == void_class] = 255
+
+        for id, trainId in id_to_trainId.items():
+            mask[mask == id] = trainId
+        return mask
+
+    @classmethod
+    def decode(cls, target):
+        target[target == 255] = 19
+        return cls.train_id_to_color[target]
+
+    def __len__(self):
+        return len(self.image_filenames)
+
+
 if __name__ == "__main__":
 
     train_dataset = CityScapes("train")
+    ti, tl = train_dataset[9]
     val_dataset = CityScapes("val")
+    vi, vl = val_dataset[2]
