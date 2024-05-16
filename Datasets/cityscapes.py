@@ -78,7 +78,7 @@ id_to_trainId = {
 }
 
 
-class CityScapes(Dataset):
+class Cityscapes(Dataset):
 
     mode: Literal["train", "val"]
     train_id_to_color = [
@@ -96,7 +96,7 @@ class CityScapes(Dataset):
         load_mode: Literal["instant", "on_request"] = "on_request",
         transformations: Optional[callable] = None,
     ):
-        super(CityScapes, self).__init__()
+        super(Cityscapes, self).__init__()
 
         self.mode = mode
         self.load_mode = load_mode
@@ -173,7 +173,8 @@ class CityScapes(Dataset):
             f"Cityscapes {mode} dataset initialized with {len(self.image_filenames)} images ({self.load_mode})"
         )
 
-    def map_labels(self, label):
+    @classmethod
+    def map_labels(cls, label):
         # we vectorize the get function of a dictionary since we want to
         # pass as input a label image, which is an array of labelIds
         mapped_labels = np.vectorize(id_to_trainId.get)(
@@ -184,7 +185,7 @@ class CityScapes(Dataset):
     def read_image(self, img_path: str, label_path: str) -> tuple:
         img = Image.open(img_path).convert("RGB")
         tmp = np.array(Image.open(label_path), dtype=np.uint8)
-        tmp = CityScapes.encode(tmp)
+        tmp = Cityscapes.encode(tmp)
         target = Image.fromarray(tmp)
         return img, target
 
@@ -207,16 +208,19 @@ class CityScapes(Dataset):
         img_transformations = (
             pre_shared_transformations
             + [
+                # v2.ToImage(),
+                # v2.ToDtype(torch.float32, scale=True),
                 v2.Resize(self.cropSize, v2.InterpolationMode.BILINEAR),
-                v2.ToImage(),
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                # v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             ]
             + post_shared_transformations
         )
         label_transformations = (
             pre_shared_transformations
-            + [v2.Resize(self.cropSize, v2.InterpolationMode.NEAREST), v2.PILToTensor()]
+            + [
+                # v2.PILToTensor(),
+                v2.Resize(self.cropSize, v2.InterpolationMode.NEAREST)
+            ]
             + post_shared_transformations
         )
 
@@ -230,24 +234,28 @@ class CityScapes(Dataset):
         else:
             transform_lbl = lambda it: it
 
-        return transform_img(image), transform_lbl(label)
+        image, label = transform_img(image), transform_lbl(label)
 
+        return ExtToTensor()(image, label)
+    
     def _transformation_val(self, image, label) -> tuple:
         pre_shared_transformations = []
         post_shared_transformations = []
         img_transformations = (
             pre_shared_transformations
             + [
-                v2.ToImage(),
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                # v2.ToImage(),
+                # v2.ToDtype(torch.float32, scale=True),
+                # v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             ]
             + post_shared_transformations
         )
 
         label_transformations = (
             pre_shared_transformations
-            + [v2.PILToTensor()]
+            + [
+                # v2.PILToTensor()
+            ]
             + post_shared_transformations
         )
 
@@ -261,33 +269,50 @@ class CityScapes(Dataset):
         else:
             transform_lbl = lambda it: it
 
-        return transform_img(image), transform_lbl(label)
+        image, label = transform_img(image), transform_lbl(label)
+
+        return ExtToTensor()(image, label)
 
     @classmethod
     def encode(cls, mask):
         # Put all void classes to zero
-        classes_to_void = [
-            v.id for v in labels_dict if v.trainId == 255 or v.trainId == -1
-        ]
-        for void_class in classes_to_void:
-            mask[mask == void_class] = 255
+        # classes_to_void = [
+        #     v.id for v in labels_dict if v.trainId == 255 or v.trainId == -1
+        # ]
+        # for void_class in classes_to_void:
+        #     mask[mask == void_class] = 255
 
-        for id, trainId in id_to_trainId.items():
-            mask[mask == id] = trainId
-        return mask
+        # for id, trainId in id_to_trainId.items():
+        #     mask[mask == id] = trainId
+        return Cityscapes.map_labels(mask)
 
-    @classmethod
-    def decode(cls, target):
-        target[target == 255] = 19
-        return cls.train_id_to_color[target]
+    # @classmethod
+    # def decode(cls, target):
+    #     target[target == 255] = 25
+    #     return cls.train_id_to_color[target]
 
     def __len__(self):
         return len(self.image_filenames)
 
 
+class ExtToTensor:
+    """Convert a ``PIL Image`` or ``numpy.ndarray`` to tensor.
+    Converts a PIL Image or numpy.ndarray (H x W x C) in the range
+    [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0].
+    """
+
+    def __init__(self, target_type="uint8"):
+        self.target_type = target_type
+
+    def __call__(self, pic: Image, lbl: Image) -> tuple[torch.Tensor, torch.Tensor]:
+        return torch.from_numpy(
+            np.array(pic, dtype=np.float32).transpose(2, 0, 1)
+        ), torch.from_numpy(np.array(lbl, dtype=self.target_type))
+
+
 if __name__ == "__main__":
 
-    train_dataset = CityScapes("train")
+    train_dataset = Cityscapes("train")
     ti, tl = train_dataset[9]
-    val_dataset = CityScapes("val")
+    val_dataset = Cityscapes("val")
     vi, vl = val_dataset[2]

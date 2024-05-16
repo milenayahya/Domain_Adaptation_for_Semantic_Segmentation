@@ -1,8 +1,8 @@
 #!/usr/bin/python
 # -*- encoding: utf-8 -*-
 from model.model_stages import BiSeNet
-from Datasets.cityscapes import CityScapes
-from Datasets.gta5 import gta5
+from Datasets.cityscapes import Cityscapes
+from Datasets.gta5 import GTA5
 import torch
 from torch.utils.data import DataLoader
 import logging
@@ -253,11 +253,11 @@ def main(tr_dataset, vl_dataset, aug: bool=False):
     print("will create train_dataset")
 
     if tr_dataset == 0:
-        train_dataset = CityScapes(mode)
+        train_dataset = Cityscapes(mode)
     elif tr_dataset == 1 and not aug:
-        train_dataset = gta5(mode)
+        train_dataset = GTA5(mode)
     elif tr_dataset == 1 and aug:
-        train_dataset = gta5(mode, aug=True)
+        train_dataset = GTA5(mode, aug=True)
 
     ###################################
     if len(train_dataset) == 0:
@@ -276,9 +276,9 @@ def main(tr_dataset, vl_dataset, aug: bool=False):
     )
 
     if vl_dataset == 0:
-        val_dataset = CityScapes(mode="val")
+        val_dataset = Cityscapes(mode="val")
     elif vl_dataset == 1:
-        val_dataset = gta5(mode="val")
+        val_dataset = GTA5(mode="val")
 
     dataloader_val = DataLoader(
         val_dataset,

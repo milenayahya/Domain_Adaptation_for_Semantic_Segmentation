@@ -1,40 +1,34 @@
-from typing import Literal, Optional
+from typing import Callable, Literal, Union
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
-from torchvision.transforms import v2
-import torchvision.transforms.v2.functional as TF
 from pathlib import Path
 import numpy as np
-from Datasets.augmentation import augment
-from Datasets import GTA5_BASE_PATH
+
+from .transformations import OurCompose, OurToTensor
+from .augmentation import augment
+from . import GTA5_BASE_PATH
 import logging
 
 logger = logging.getLogger(__name__)
 # run splitGTA5.py before to split the data into train and val
 
 
-class gta5(Dataset):
+class GTA5(Dataset):
     mode: Literal["train", "val"]
-    aug: bool
-    cropSize: tuple[int, int]
     load_mode: Literal["instant", "on_request"]
-    trasnform: callable
+    transforms: Callable
 
     def __init__(
         self,
         mode: Literal["train", "val"],
-        aug: bool = False,
-        cropSize: tuple[int, int] = (720, 1280),
         load_mode: Literal["instant", "on_request"] = "on_request",
-        transformations: Optional[callable] = None,
+        transforms=None,
     ):
-        super(gta5, self).__init__()
+        super(GTA5, self).__init__()
 
         self.mode = mode
-        self.cropSize = cropSize
         self.load_mode = load_mode
-        self.aug = aug
 
         # self.root = Path("/content/GTA5/GTA5")  #google colab path
         self.root = Path(GTA5_BASE_PATH)  # local path
@@ -50,16 +44,8 @@ class gta5(Dataset):
         logger.info("Images path: %s" % self.images_path)
         logger.info("Labels path: %s" % self.labels_path)
 
-        # mean and std of ImageNet dataset
-        if transformations is None:
-            self.transform = v2.Compose(
-                [
-                    v2.ToTensor(),
-                    v2.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-                ]
-            )
-        else:
-            self.transform = transformations
+        self.transforms = OurCompose([]) if transforms is None else transforms
+
         # fmt: off
         self.id_to_trainid = {
             7: 0,  8: 1,  11: 2,  12: 3,  13: 4,  17: 5,  19: 6, 
@@ -95,19 +81,10 @@ class gta5(Dataset):
             img_path, label_path = self.image_filenames[idx], self.label_filenames[idx]
             return self.read_image(img_path, label_path)
 
-    def read_image(self, img_path: str, label_path: str) -> tuple:
+    def read_image(self, img_path: Union[str, Path], label_path: Union[str, Path]) -> tuple:
         with Image.open(img_path).convert("RGB") as img, Image.open(
             label_path
         ) as label:
-            if self.mode == "train":
-                i, j, h, w = v2.RandomCrop.get_params(img, self.cropSize)
-                img = TF.crop(img, i, j, h, w)
-                label = TF.crop(label, i, j, h, w)
-                if self.aug:
-                    img, label = augment(img, label)
-
-            img_tensor = self.transform(img)
-
             label = np.asarray(label, np.float32)
 
             label_copy = 255 * np.ones(label.shape, dtype=np.float32)
@@ -115,6 +92,7 @@ class gta5(Dataset):
                 label_copy[label == k] = v
 
             label_tensor = torch.tensor(label_copy, dtype=torch.float32)
+            img_tensor, label_tensor = self.transforms(img, label_tensor)
             return img_tensor, label_tensor
 
     def __len__(self):
@@ -123,8 +101,7 @@ class gta5(Dataset):
 
 if __name__ == "__main__":
 
-    train_dataset = gta5("train")
+    train_dataset = GTA5("train")
     ti, tl = train_dataset[4]
-    val_dataset = gta5("val")
+    val_dataset = GTA5("val", transforms=OurToTensor())
     vi, vl = val_dataset[4]
-    

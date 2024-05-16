@@ -3,7 +3,9 @@
 import logging
 from datetime import datetime, timedelta
 import math
-from typing import Literal
+from typing import Literal, Optional
+from Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE
+from Datasets.transformations import *
 from model.model_stages import BiSeNet
 import torch
 from torch.utils.data import DataLoader
@@ -13,8 +15,9 @@ from tensorboardX import SummaryWriter
 import torch.cuda.amp as amp
 from tqdm import tqdm
 import os
-from Datasets.cityscapes import CityScapes
-from Datasets.gta5 import gta5
+from Datasets.cityscapes_torch import Cityscapes
+from Datasets.gta5 import GTA5
+
 from utils import (
     fast_compute_global_accuracy,
     reverse_one_hot,
@@ -46,7 +49,7 @@ logger.setLevel(logging.DEBUG)
 DatasetName = Literal["Cityscapes", "GTA5"]
 
 
-def val(args, model, dataloader) -> tuple[float, float]:
+def val(args, model, dataloader) -> tuple:
     with torch.no_grad():
         model.eval()
         precision_record = []
@@ -87,7 +90,7 @@ def val(args, model, dataloader) -> tuple[float, float]:
 
 
 def train(
-    args, model, optimizer, dataloader_train, dataloader_val, training_name: str = None
+    args, model, optimizer, dataloader_train, dataloader_val, training_name: Optional[str] = None
 ):
     writer = SummaryWriter(comment=f"{training_name}{args.optimizer}")
 
@@ -314,12 +317,29 @@ def main(
     mode = args.mode
 
     if training_ds_name == "Cityscapes":
-        train_dataset = CityScapes("train")
+        train_dataset = Cityscapes(
+            split="train",
+            transforms=OurCompose(
+                [OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]
+            ),
+        )
     elif training_ds_name == "GTA5":
-        train_dataset = gta5("train", aug=augmentation)
+        if augmentation:
+            transformations = OurCompose(
+                [
+                    OurResize(GTA5_CROP_SIZE),
+                    OurGeometricAugmentationTransformations(),
+                    OurColorJitterTransformation(),
+                    OurToTensor(),
+                ]
+            )
+        else:
+            transformations = OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor()])
+
+        train_dataset = GTA5("train", transforms=transformations)
     else:
         raise ValueError("Dataset non valido")
-    
+
     dataloader_train = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -330,12 +350,11 @@ def main(
     )
 
     if validation_ds_name == "Cityscapes":
-        val_dataset = CityScapes(mode="val")
+        val_dataset = Cityscapes(split="val", transforms=OurToTensor())
     elif validation_ds_name == "GTA5":
-        val_dataset = gta5(mode="val")
+        val_dataset = GTA5(mode="val", transforms=OurToTensor())
     else:
         raise ValueError("Dataset non valido")
-
 
     dataloader_val = DataLoader(
         val_dataset,
@@ -371,7 +390,7 @@ def main(
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
         logger.critical("not supported optimizer")
-        return None
+        return (0, 0)
 
     if save_model_postfix == "2C1":
         # IF task 2c.1 -> Re use model of 2b and valuate only on Cityscape directly
@@ -394,7 +413,9 @@ def main(
     # final test
     if args.mode != "train" or args.use_best:
         checkpoint_filename = os.path.join(args.save_model_path, "best.tar")
-        logger.info(f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}")
+        logger.info(
+            f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}"
+        )
         # Load Best before final evaluation
         if os.path.exists(checkpoint_filename):
             checkpoint = torch.load(checkpoint_filename)
@@ -409,8 +430,10 @@ if __name__ == "__main__":
     # logger.info("tg:Starting MEGA training")
     # 2a
     try:
-        logger.info("tg:Starting 2A Training")
-        precision_2a, miou_2a = main("Cityscapes", "Cityscapes", save_model_postfix="2A")
+        logger.info("tg:Starting ONLY 2A Training")
+        precision_2a, miou_2a = main(
+            "Cityscapes", "Cityscapes", save_model_postfix="2A"
+        )
         logger.info(f"tg:2A Results: Precision={precision_2a} Mean IoU={miou_2a}")
     except Exception as e:
         logger.critical("tg:Error on 2A", exc_info=e)

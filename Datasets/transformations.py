@@ -1,0 +1,152 @@
+from abc import ABC
+from typing import List
+from torchvision.transforms.v2 import functional as F
+from torchvision.transforms import v2
+import torch
+import numpy as np
+import random
+
+OurImageT = torch.Tensor
+OurLabelT = torch.Tensor
+
+
+class BaseCustomTransformation(ABC):
+    def __init__(self):
+        pass
+
+    def __call__(
+        self, image: "OurImageT", label: "OurLabelT"
+    ) -> tuple["OurImageT", "OurLabelT"]:
+        return image, label
+
+
+class OurResize(BaseCustomTransformation):
+    def __init__(self, size: list[int]):
+        self.size = size
+
+    def __call__(self, image, label):
+        return F.resize(image, self.size), F.resize(
+            label, self.size, F.InterpolationMode.NEAREST
+        )
+
+
+class OurNormalization(BaseCustomTransformation):
+    def __init__(self, mean: list[float], std: list[float]):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, image, label):
+        return F.normalize(image, self.mean, self.std), label
+
+
+class OurRandomCrop(BaseCustomTransformation):
+    def __init__(self, size: tuple[int, int]):
+        self.size = size
+
+    def __call__(self, image, label):
+        i, j, h, w = v2.RandomCrop(self.size).get_params(image, self.size)
+        return F.crop_image(image, i, j, h, w), F.crop_mask(label, i, j, h, w)
+
+
+class OurToTensor(BaseCustomTransformation):
+    """Convert a ``PIL Image`` or ``numpy.ndarray`` to tensor.
+    Converts a PIL Image or numpy.ndarray (H x W x C) in the range
+    [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0].
+    """
+
+    def __init__(self, target_type="uint8"):
+        self.target_type = target_type
+
+    def __call__(
+        self, pic: OurImageT, lbl: OurLabelT
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return torch.from_numpy(
+            np.array(pic, dtype=np.float32).transpose(2, 0, 1)
+        ), torch.from_numpy(np.array(lbl, dtype=self.target_type))
+
+
+class OurCompose(BaseCustomTransformation):
+
+    def __init__(self, transforms: list[BaseCustomTransformation]):
+        self.transforms = [] if transforms is None else transforms
+
+    def __call__(self, img: OurImageT, lbl: OurLabelT) -> tuple[OurImageT, OurLabelT]:
+        for t in self.transforms:
+            img, lbl = t(img, lbl)
+        return img, lbl
+
+
+# random horizontal flips, random rotations, and random perspective need to be applied to the image and its
+# corresponding label in the same exact way, so label will continue to represent the portion of the image
+# we are considering
+class OurGeometricAugmentationTransformations(BaseCustomTransformation):
+    def __init__(self, probability=0.5, degrees=90, distortion_scale=0.5):
+        # define the probability of applying the transformations
+        self.probability = probability
+        # define parameters for rotation and perspective
+        self.degrees = degrees
+        self.distortion_scale = distortion_scale
+
+    def __call__(self, image, label):
+
+        if random.random() < self.probability:
+            image = F.hflip(image)
+            label = F.hflip(label)
+
+        if random.random() < self.probability:
+            angle = random.uniform(-self.degrees, self.degrees)
+            # rotate with same angle
+            image = F.rotate(image, angle)
+            label = F.rotate(label, angle)
+
+        return image, label
+
+
+class OurColorJitterTransformation(BaseCustomTransformation):
+    def __init__(
+        self,
+        grayscale: float = 3,
+        brightness: float = 0.2,
+        hue: float = 0.2,
+        saturation: float = 0.1,
+        contrast: float = 0.1,
+        solarize_p: float = 1,
+        solarize_threshold: float = 0.4,
+        blur_kernel: int = 15,
+        blur_sigma: list[float] = [0.3, 0.7],
+    ):
+        self.grayscale = grayscale
+        self.brightness = brightness
+        self.hue = hue
+        self.saturation = saturation
+        self.contrast = contrast
+        self.solarize_p = solarize_p
+        self.solarize_threshold = solarize_threshold
+        self.blur_kernel = blur_kernel
+        self.blur_sigma = blur_sigma
+
+    def __call__(self, image, label):
+        bright_t = v2.ColorJitter(brightness=self.brightness)
+        contrast_t = v2.ColorJitter(contrast=self.contrast)
+        saturation_t = v2.ColorJitter(saturation=self.saturation)
+        hue_t = v2.ColorJitter(hue=self.hue)
+        gs_t = v2.Grayscale(3)
+        blur_t = v2.GaussianBlur(kernel_size=self.blur_kernel, sigma=self.blur_sigma)
+        sol_t = v2.RandomSolarize(p=1, threshold=0.4)
+
+        # apply color and texture transformations to image only
+        t1 = [contrast_t, bright_t]
+        t2 = [sol_t, gs_t, blur_t]
+        t3 = [hue_t, saturation_t]
+
+        applied_t = []
+        if random.random() > 0.5:
+            applied_t.extend(t1)
+
+        if random.random() > 0.8:
+            applied_t.extend(t2)
+
+        if random.random() > 0.5:
+            applied_t.extend(t3)
+
+        return v2.Compose(applied_t)(image), label
