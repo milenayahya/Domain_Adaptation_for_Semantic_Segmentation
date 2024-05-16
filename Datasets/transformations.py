@@ -58,11 +58,11 @@ class OurToTensor(BaseCustomTransformation):
         self.target_type = target_type
 
     def __call__(
-        self, pic: OurImageT, lbl: OurLabelT
+        self, image: OurImageT, label: OurLabelT
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return torch.from_numpy(
-            np.array(pic, dtype=np.float32).transpose(2, 0, 1)
-        ), torch.from_numpy(np.array(lbl, dtype=self.target_type))
+        return v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])(
+            image
+        ), F.pil_to_tensor(label)
 
 
 class OurCompose(BaseCustomTransformation):
