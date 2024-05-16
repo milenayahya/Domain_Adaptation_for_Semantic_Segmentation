@@ -11,12 +11,15 @@ from torchvision.datasets.utils import iterable_to_str, verify_str_arg
 from torchvision.datasets.vision import VisionDataset
 
 from .transformations import (
+    OurColorJitterTransformation,
     OurCompose,
+    OurGeometricAugmentationTransformations,
+    OurRandomCrop,
     OurResize,
     OurToTensor,
 )
 
-from . import CITYSCAPES_BASE_PATH
+from . import CITYSCAPES_BASE_PATH, CITYSCAPES_CROP_SIZE
 
 
 class Cityscapes(VisionDataset):
@@ -178,7 +181,9 @@ class Cityscapes(VisionDataset):
         ]
 
         if not os.path.isdir(self.images_dir) or not os.path.isdir(self.targets_dir):
-            raise Exception(f"dataset must be extracted in dir {self.images_dir=} {self.targets_dir=}")
+            raise Exception(
+                f"dataset must be extracted in dir {self.images_dir=} {self.targets_dir=}"
+            )
 
         for city in os.listdir(self.images_dir):
             img_dir = os.path.join(self.images_dir, city)
@@ -245,6 +250,30 @@ class Cityscapes(VisionDataset):
             return f"{mode}_polygons.json"
 
 
+    # @classmethod
+    # def decode(cls, target):
+    #     target[target == 255] = 19
+    #     return cls.train_id_to_color[target]
+
+    # # this function is used to visualize the prediction images
+    # @classmethod 
+    # def visualize_prediction(cls,outputs,labels) -> Tuple[Any, Any]:
+    #     """
+    #     Args:
+    #             cls (CityScapes): The class object
+    #             outputs (Tensor): The output of the model
+    #             labels (Tensor): The ground truth labels
+    #     Returns:
+    #             Tuple[Any, Any]: The colorized predictions and the colorized labels
+    #     """
+    #     preds = outputs.max(1)[1].detach().cpu().numpy()
+    #     lab = labels.detach().cpu().numpy()
+    #     colorized_preds = cls.decode(preds).astype('uint8') # To RGB images, (N, H, W, 3), ranged 0~255, numpy array
+    #     colorized_labels = cls.decode(lab).astype('uint8')
+    #     colorized_preds = Image.fromarray(colorized_preds[0]) # to PIL Image
+    #     colorized_labels = Image.fromarray(colorized_labels[0])
+    #     return colorized_preds , colorized_labels
+
 if __name__ == "__main__":
     train_dataset = Cityscapes(
         CITYSCAPES_BASE_PATH,
@@ -256,3 +285,22 @@ if __name__ == "__main__":
         CITYSCAPES_BASE_PATH, "val", transforms=OurCompose([OurToTensor()])
     )
     vi, vl = val_dataset[2]
+
+    non_random = Cityscapes(
+        CITYSCAPES_BASE_PATH, "val", transforms=OurCompose([OurToTensor()])
+    )
+
+    with_random = Cityscapes(
+        CITYSCAPES_BASE_PATH,
+        "val",
+        transforms=OurCompose(
+            [
+                OurToTensor(),
+                OurRandomCrop(CITYSCAPES_CROP_SIZE),
+                OurGeometricAugmentationTransformations(),
+                OurColorJitterTransformation(),
+            ]
+        ),
+    )
+    ni, nl = non_random[1]
+    wi, wl = with_random[1]

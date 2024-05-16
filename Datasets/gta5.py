@@ -91,7 +91,7 @@ class GTA5(Dataset):
             for k, v in self.id_to_trainid.items():
                 label_copy[label == k] = v
 
-            label_tensor = torch.tensor(label_copy, dtype=torch.float32)
+            label_tensor = Image.fromarray(label_copy)
             img_tensor, label_tensor = self.transforms(img, label_tensor)
             return img_tensor, label_tensor
 
