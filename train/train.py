@@ -37,7 +37,7 @@ tg_handler.addFilter(filter)
 logging.basicConfig(
     format="%(asctime)s [%(filename)s@%(funcName)s] [%(levelname)s]:> %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(__file__), "logs/debug.log")),
+        logging.FileHandler(os.path.join(os.path.dirname(__file__), "..", "logs/debug.log")),
         logging.StreamHandler(),
         tg_handler,
     ],
