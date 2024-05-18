@@ -335,8 +335,12 @@ def save_checkpoint(state: dict, base_path: Union[str, Path], is_best: bool):
     torch.save(state, filename)
     textable = dict()
     for k, v in state.items():
+        if k in ["state_dict", "arch", "optimizer"]:
+            # ignore these
+            continue
         try:
-            textable[k] = str(v)
+            s = str(v)
+            textable[k] = s[0:100] # If it's longer than 100 maybe we don't need it
         except:
             pass
     with open(filename + ".json", "w") as f:

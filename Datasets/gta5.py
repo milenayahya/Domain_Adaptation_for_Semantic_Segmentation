@@ -1,9 +1,14 @@
-from typing import Callable, Literal, Union
+from typing import Callable, Literal, Optional, Union
+import PIL.Image
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
 from pathlib import Path
 import numpy as np
+import PIL
+from torch import Tensor
+
+from .cityscapes_torch import Cityscapes
 
 from .transformations import OurCompose, OurToTensor
 from .augmentation import augment
@@ -81,7 +86,9 @@ class GTA5(Dataset):
             img_path, label_path = self.image_filenames[idx], self.label_filenames[idx]
             return self.read_image(img_path, label_path)
 
-    def read_image(self, img_path: Union[str, Path], label_path: Union[str, Path]) -> tuple:
+    def read_image(
+        self, img_path: Union[str, Path], label_path: Union[str, Path]
+    ) -> tuple:
         with Image.open(img_path).convert("RGB") as img, Image.open(
             label_path
         ) as label:
@@ -97,6 +104,29 @@ class GTA5(Dataset):
 
     def __len__(self):
         return len(self.image_filenames)
+
+    @classmethod
+    def visualize_prediction(
+        cls,
+        prediction: Optional["Tensor"],
+        ground_truth: Optional["Tensor"],
+    ) -> tuple[Optional["PIL.Image.Image"], Optional["PIL.Image.Image"]]:
+        colorized_preds = None
+
+        if prediction is not None:
+            preds = prediction.max(1)[1].detach().cpu().numpy()
+            colorized_preds = Cityscapes.decode(preds).astype(
+                "uint8"
+            )  # To RGB images, (N, H, W, 3), ranged 0~255, numpy array
+            colorized_preds = Image.fromarray(colorized_preds[0])  # to PIL Image
+
+        colorized_gt = None
+        if ground_truth is not None:
+            gt = ground_truth.detach().cpu().numpy()
+            colorized_gt = Cityscapes.decode(gt).astype("uint8")
+            colorized_gt = Image.fromarray(colorized_gt[0][0])
+
+        return colorized_preds, colorized_gt
 
 
 if __name__ == "__main__":

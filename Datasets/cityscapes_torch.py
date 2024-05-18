@@ -12,6 +12,7 @@ from torch import Tensor
 from torchvision.datasets.utils import iterable_to_str, verify_str_arg
 from torchvision.datasets.vision import VisionDataset
 import numpy as np
+from tensorboardX import SummaryWriter
 import numpy.typing as npt
 from .transformations import (
     OurColorJitterTransformation,
@@ -148,8 +149,9 @@ class Cityscapes(VisionDataset):
         ),
     ]
 
-
-    train_id_to_color = [c.color for c in classes if (c.train_id != -1 and c.train_id != 255)]
+    train_id_to_color = [
+        c.color for c in classes if (c.train_id != -1 and c.train_id != 255)
+    ]
     train_id_to_color.append([0, 0, 0])
     train_id_to_color = np.array(train_id_to_color)
 
@@ -263,23 +265,25 @@ class Cityscapes(VisionDataset):
     # this function is used to visualize the prediction images
     @classmethod
     def visualize_prediction(
-        cls, prediction: Optional["Tensor"], ground_truth: Optional["Tensor"]
+        cls,
+        prediction: Optional["Tensor"],
+        ground_truth: Optional["Tensor"],
     ) -> tuple[Optional["PIL.Image.Image"], Optional["PIL.Image.Image"]]:
+        colorized_preds = None
+
         if prediction is not None:
             preds = prediction.max(1)[1].detach().cpu().numpy()
             colorized_preds = cls.decode(preds).astype(
                 "uint8"
             )  # To RGB images, (N, H, W, 3), ranged 0~255, numpy array
             colorized_preds = Image.fromarray(colorized_preds[0])  # to PIL Image
-        else:
-            colorized_preds = None
 
+        colorized_gt = None
         if ground_truth is not None:
             gt = ground_truth.detach().cpu().numpy()
             colorized_gt = cls.decode(gt).astype("uint8")
-            colorized_gt = Image.fromarray(colorized_gt[0])
-        else:
-            colorized_gt = None
+            colorized_gt = Image.fromarray(colorized_gt[0][0])
+        
         return colorized_preds, colorized_gt
 
 

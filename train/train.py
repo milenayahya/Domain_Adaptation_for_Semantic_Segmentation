@@ -43,9 +43,7 @@ tg_handler.addFilter(filter)
 logging.basicConfig(
     format="%(asctime)s [%(filename)s@%(funcName)s] [%(levelname)s]:> %(message)s",
     handlers=[
-        logging.FileHandler(
-            os.path.join(PROJECT_BASE_PATH, "logs/debug.log")
-        ),
+        logging.FileHandler(os.path.join(PROJECT_BASE_PATH, "logs/debug.log")),
         logging.StreamHandler(),
         # tg_handler,
     ],
@@ -59,13 +57,24 @@ Tasks = Literal["2A", "2B", "2C1", "2C2"]
 
 
 def val(
-    args: "TrainOptions", model: "torch.nn.Module", dataloader: "DataLoader"
+    args: "TrainOptions",
+    model: "torch.nn.Module",
+    dataloader: "DataLoader",
+    visualize_images: bool = False,
+    writer: Optional["SummaryWriter"] = None,
+    name: Optional[str] = None,
+    epoch: Optional[int] = None,
+    dataset_name: Optional[DatasetName] = None,
 ) -> tuple:
+
+    visualize_img_idx = 0  # random.randrange(0, len(dataloader))
+
     with torch.no_grad():
         model.eval()
         precision_record = []
         hist = np.zeros((args.num_classes, args.num_classes))
         pbar = tqdm(total=len(dataloader), desc="Evaluation", unit="img")
+
         for i, (data, label) in enumerate(dataloader):
             label = label.type(torch.LongTensor)
             data = data.cuda()
@@ -73,6 +82,41 @@ def val(
 
             # get RGB predict image
             predict, _, _ = model(data)
+            if (
+                writer is not None
+                and name is not None
+                and epoch is not None
+                and dataset_name is not None
+                and visualize_images
+                and i == visualize_img_idx
+            ):
+                logger.info(
+                    f"Visualizing Prediction of {name}, picked image at index {visualize_img_idx}"
+                )
+                if dataset_name == "Cityscapes":
+                    vp, vl = Cityscapes.visualize_prediction(predict, label)
+                elif dataset_name == "GTA5":
+                    vp, vl = GTA5.visualize_prediction(predict, label)
+                writer.add_image(
+                    f"{name}/prediction",
+                    np.array(vp),
+                    global_step=epoch,
+                    dataformats="HWC",
+                )
+                writer.add_image(
+                    f"{name}/ground_truth",
+                    np.array(vl),
+                    global_step=epoch,
+                    dataformats="HWC",
+                )
+                writer.add_image(
+                    f"{name}/source",
+                    np.array(data[0].cpu()),
+                    global_step=epoch,
+                    dataformats="CHW",
+                )
+                writer.flush()
+
             predict = predict.squeeze(0)
             predict = reverse_one_hot(predict)
             predict = np.array(predict.cpu())
@@ -89,6 +133,7 @@ def val(
             # predict = colour_code_segmentation(np.array(predict), label_info)
             # label = colour_code_segmentation(np.array(label), label_info)
             precision_record.append(precision)
+
             pbar.update(1)
 
         precision = np.mean(precision_record)
@@ -107,7 +152,7 @@ def train(
     dataloader_train: "DataLoader",
     dataloader_val: "DataLoader",
     training_name: Optional[str] = None,
-    writer: Optional["SummaryWriter"] = None
+    writer: Optional["SummaryWriter"] = None,
 ):
     if writer is None:
         writer = SummaryWriter(comment=f"")
@@ -128,13 +173,15 @@ def train(
         optimizer.load_state_dict(checkpoint["optimizer"])
         max_miou = checkpoint["max_miou"]
         precision = checkpoint.get("precision", 0)
-        logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}, {precision=} {max_miou=}")
+        logger.info(
+            f"Loaded latest checkpoint that was at epoch n. {start_epoch}, {precision=} {max_miou=}"
+        )
 
         if start_epoch >= args.num_epochs + 1:
             logger.warning("Since checkpoint is already complete, skipping training")
             return
 
-    tensorboard_base_name = f"{training_name}/epoch/"
+    tensorboard_base_name = f"{training_name}/"
     best_epoch = 0
     for epoch in range(start_epoch, args.num_epochs + 1):
         ts_start = datetime.today()
@@ -167,12 +214,20 @@ def train(
             tq.update(args.batch_size)
             tq.set_postfix(loss="%.6f" % loss)
             step += 1
-            writer.add_scalar("step/loss", loss, step)
+            writer.add_scalar(
+                f"{tensorboard_base_name}/loss_step",
+                loss,
+                step,
+                display_name="Loss per Step",
+            )
             loss_record.append(loss.item())
         tq.close()
         loss_train_mean = np.mean(loss_record)
         writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_train", float(loss_train_mean), epoch
+            f"{tensorboard_base_name}/loss_epoch",
+            float(loss_train_mean),
+            epoch,
+            display_name="Mean Loss per Epoch",
         )
         ts_duration: timedelta = datetime.today() - ts_start
         logger.info(
@@ -198,13 +253,27 @@ def train(
                     "max_miou": max_miou,
                     "precision": precision,
                     "optimizer": optimizer.state_dict(),
+                    "name": training_name,
                 },
                 args.save_model_path,
                 False,
             )
 
         if epoch % args.validation_step == 0:
-            precision, miou = val(args, model, dataloader_val)
+            precision, miou = val(
+                args,
+                model,
+                dataloader_val,
+                writer=writer,
+                name=training_name,
+                epoch=epoch,
+                visualize_images=True,
+                dataset_name=(
+                    "Cityscapes"
+                    if (training_name is not None and not "2B" in training_name)
+                    else "GTA5"
+                ),
+            )
             writer.add_scalar(
                 f"{tensorboard_base_name}/precision",
                 precision,
@@ -226,15 +295,14 @@ def train(
                         "max_miou": max_miou,
                         "precision": precision,
                         "optimizer": optimizer.state_dict(),
+                        "name": training_name,
                     },
                     args.save_model_path,
                     True,
                 )
     logger.info(
-        f"tg:Finished training of {training_name} after {sum(runs_execution_time)/len(runs_execution_time)} seconds. Best was reached @ {best_epoch} epoch"
+        f"tg:Finished training of {training_name} after an average of {sum(runs_execution_time)/len(runs_execution_time)} seconds per epoch. Best was reached @ {best_epoch} epoch"
     )
-
-
 
 
 def main(
@@ -244,7 +312,7 @@ def main(
     augmentation: bool = False,
     save_model_postfix: str = "",
     args: Optional[TrainOptions] = None,
-    writer: Optional["SummaryWriter"] = None
+    writer: Optional["SummaryWriter"] = None,
 ) -> tuple[float, float]:
     if args is None:
         args = parse_args()
@@ -348,6 +416,8 @@ def main(
             writer=writer,
         )
     # final test
+    checkpoint_filename = None
+    checkpoint = None
     if args.mode != "train" or args.use_best:
         checkpoint_filename = os.path.join(args.save_model_path, "best.tar")
         logger.info(
@@ -359,42 +429,82 @@ def main(
             start_epoch = checkpoint["epoch"]
             model.load_state_dict(checkpoint["state_dict"])
             logger.info(f"Loaded best checkpoint that was at epoch n. {start_epoch}")
-        else: 
-            raise Exception(f"Trying to train on best but no best exitsts. Looking for {checkpoint_filename}")
+        else:
+            raise Exception(
+                f"Trying to train on best but no best exitsts. Looking for {checkpoint_filename}"
+            )
 
-    return val(args, model, dataloader_val)
+    precision, max_miou = val(
+        args,
+        model,
+        dataloader_val,
+        writer=writer,
+        name=save_model_postfix,
+        visualize_images=True,
+        epoch=args.num_epochs + 10,  # above anything, final validation
+        dataset_name=validation_ds_name,
+    )
+
+    # Save again best model, but with updated precision and max_miou
+    if (
+        checkpoint_filename is not None
+        and checkpoint is not None
+        and os.path.exists(checkpoint_filename)
+    ):
+        checkpoint["precision"] = precision
+        checkpoint["max_miou"] = max_miou
+        if "name" not in checkpoint.keys():
+            checkpoint["name"] = save_model_postfix
+        save_checkpoint(checkpoint, args.save_model_path, True)
+
+    return precision, max_miou
 
 
-# modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
-
-
-def run2A(args: Optional[TrainOptions] = None, name: str = "2A", writer: Optional["SummaryWriter"] = None):
+def run2A(
+    args: Optional[TrainOptions] = None,
+    name: str = "2A",
+    writer: Optional["SummaryWriter"] = None,
+):
     if "2A" not in name:
         name = f"2A/{name}"
 
     try:
         logger.info(f"tg:Starting {name} Training")
         precision_2a, miou_2a = main(
-            "Cityscapes", "Cityscapes", save_model_postfix=name, args=args, writer=writer
+            "Cityscapes",
+            "Cityscapes",
+            save_model_postfix=name,
+            args=args,
+            writer=writer,
         )
         logger.info(f"tg:{name} Results: Precision={precision_2a} Mean IoU={miou_2a}")
     except Exception as e:
         logger.critical(f"tg:Error on {name}", exc_info=e)
 
 
-def run2B(args: Optional[TrainOptions] = None, name: str = "2B", writer: Optional["SummaryWriter"] = None):
+def run2B(
+    args: Optional[TrainOptions] = None,
+    name: str = "2B",
+    writer: Optional["SummaryWriter"] = None,
+):
     if "2B" not in name:
         name = f"2B/{name}"
 
     try:
         logger.info(f"tg:Starting {name} Training")
-        precision_2b, miou_2b = main("GTA5", "GTA5", save_model_postfix=name, args=args, writer=writer)
+        precision_2b, miou_2b = main(
+            "GTA5", "GTA5", save_model_postfix=name, args=args, writer=writer
+        )
         logger.info(f"tg:{name} Results: Precision={precision_2b} Mean IoU={miou_2b}")
     except Exception as e:
         logger.critical(f"tg:Error on {name}", exc_info=e)
 
 
-def run2C1(args: Optional[TrainOptions] = None, name: str = "2C1", writer: Optional["SummaryWriter"] = None):
+def run2C1(
+    args: Optional[TrainOptions] = None,
+    name: str = "2C1",
+    writer: Optional["SummaryWriter"] = None,
+):
     if "2C1" not in name:
         name = f"2C1/{name}"
 
@@ -408,14 +518,23 @@ def run2C1(args: Optional[TrainOptions] = None, name: str = "2C1", writer: Optio
         logger.critical(f"tg:Error on {name}", exc_info=e)
 
 
-def run2C2(args: Optional[TrainOptions] = None, name: str = "2C2", writer: Optional["SummaryWriter"] = None):
+def run2C2(
+    args: Optional[TrainOptions] = None,
+    name: str = "2C2",
+    writer: Optional["SummaryWriter"] = None,
+):
     if "2C2" not in name:
         name = f"2C2/{name}"
 
     try:
         logger.info(f"tg:Starting {name} Training")
         precision_2c2, miou_2c2 = main(
-            "GTA5", "Cityscapes", augmentation=True, save_model_postfix=name, args=args, writer=writer
+            "GTA5",
+            "Cityscapes",
+            augmentation=True,
+            save_model_postfix=name,
+            args=args,
+            writer=writer,
         )
         logger.info(f"tg:{name} Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
     except Exception as e:
@@ -457,18 +576,18 @@ def grid_search():
     # Optimizer: SGD, ADAM
     GRID: dict[str, dict] = {
         # "SGD-4": {"batch_size": 4, "optimizer": "sgd"},
+        "ADAM-4": {"batch_size": 4, "optimizer": "adam"},
         # "SGD-6": {"batch_size": 6, "optimizer": "sgd"},
-        # "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
-        "ADAM-4":{"batch_size": 4, "optimizer": "adam"},
         # "ADAM-6":{"batch_size": 6, "optimizer": "adam"},
+        # "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
         # "ADAM-8":{"batch_size": 8, "optimizer": "adam"},
     }
     logger.info(f"tg: Starting GRID SEARCH: {list(GRID.keys())}")
+    writer = SummaryWriter(comment=f"_GRID_SEARCH")
     for name, args in GRID.items():
-        
-        # run2A(args=TrainOptions().from_dict(args), name=f"2A/{name}")
-        run2B(args=TrainOptions().from_dict(args), name=f"2B/{name}")
-    
+        run2A(args=TrainOptions().from_dict(args), name=f"2A/{name}", writer=writer)
+        run2B(args=TrainOptions().from_dict(args), name=f"2B/{name}", writer=writer)
+
 
 if __name__ == "__main__":
     # tasks_to_run: list[Tasks] = ["2C1", "2C2"]
