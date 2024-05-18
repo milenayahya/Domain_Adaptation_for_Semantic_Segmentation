@@ -575,15 +575,15 @@ def grid_search():
     # Batch size: 4 or 6 or 8
     # Optimizer: SGD, ADAM
     GRID: dict[str, dict] = {
-        # "SGD-4": {"batch_size": 4, "optimizer": "sgd"},
-        "ADAM-4": {"batch_size": 4, "optimizer": "adam"},
-        # "SGD-6": {"batch_size": 6, "optimizer": "sgd"},
-        # "ADAM-6":{"batch_size": 6, "optimizer": "adam"},
-        # "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
-        # "ADAM-8":{"batch_size": 8, "optimizer": "adam"},
+        "ADAM-4": {"batch_size": 4, "optimizer": "adam"}, # Already done
+        "SGD-4": {"batch_size": 4, "optimizer": "sgd"},
+        "ADAM-6":{"batch_size": 6, "optimizer": "adam"},
+        "SGD-6": {"batch_size": 6, "optimizer": "sgd"},
+        "ADAM-8":{"batch_size": 8, "optimizer": "adam"},
+        "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
     }
     logger.info(f"tg: Starting GRID SEARCH: {list(GRID.keys())}")
-    writer = SummaryWriter(comment=f"_GRID_SEARCH")
+    writer = SummaryWriter(comment=f"_GRID_SEARCH_OVER_NIGHT")
     for name, args in GRID.items():
         run2A(args=TrainOptions().from_dict(args), name=f"2A/{name}", writer=writer)
         run2B(args=TrainOptions().from_dict(args), name=f"2B/{name}", writer=writer)
