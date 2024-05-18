@@ -3,13 +3,16 @@ import json
 import os
 from collections import namedtuple
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
+import PIL
 from PIL import Image
-
+import PIL.Image
+from torch import Tensor
 from torchvision.datasets.utils import iterable_to_str, verify_str_arg
 from torchvision.datasets.vision import VisionDataset
-
+import numpy as np
+import numpy.typing as npt
 from .transformations import (
     OurColorJitterTransformation,
     OurCompose,
@@ -145,31 +148,34 @@ class Cityscapes(VisionDataset):
         ),
     ]
 
+
+    train_id_to_color = [c.color for c in classes if (c.train_id != -1 and c.train_id != 255)]
+    train_id_to_color.append([0, 0, 0])
+    train_id_to_color = np.array(train_id_to_color)
+
     def __init__(
         self,
         root: Optional[Union[str, Path]] = CITYSCAPES_BASE_PATH,
-        split: str = "train",
-        mode: str = "fine",
+        mode: Literal["train", "val"] = "train",
         target_type: Union[List[str], str] = "semantic",
         transforms: Optional[Callable] = None,
     ) -> None:
         transform = None
         target_transform = None
         super().__init__(str(root), transforms, transform, target_transform)
-        self.mode = "gtFine" if mode == "fine" else "gtCoarse"
-        self.images_dir = os.path.join(os.path.abspath(self.root), "images", split)
-        self.targets_dir = os.path.join(os.path.abspath(self.root), self.mode, split)
+        self.mode = "gtFine"
+        self.images_dir = os.path.join(os.path.abspath(self.root), "images", mode)
+        self.targets_dir = os.path.join(os.path.abspath(self.root), self.mode, mode)
         self.target_type = target_type
-        self.split = split
+        self.split = mode
         self.images = []
         self.targets = []
 
-        verify_str_arg(mode, "mode", ("fine", "coarse"))
         valid_modes = ("train", "val")
 
-        msg = "Unknown value '{}' for argument split if mode is '{}'. Valid values are {{{}}}."
-        msg = msg.format(split, mode, iterable_to_str(valid_modes))
-        verify_str_arg(split, "split", valid_modes, msg)
+        msg = "Unknown value '{}' for argument mode. Valid values are {{{}}}."
+        msg = msg.format(mode, iterable_to_str(valid_modes))
+        verify_str_arg(mode, "mode", valid_modes, msg)
 
         if not isinstance(target_type, list):
             self.target_type = [target_type]
@@ -249,36 +255,39 @@ class Cityscapes(VisionDataset):
         else:
             return f"{mode}_polygons.json"
 
+    @classmethod
+    def decode(cls, target: "npt.NDArray"):
+        target[target == 255] = 19
+        return cls.train_id_to_color[target]
 
-    # @classmethod
-    # def decode(cls, target):
-    #     target[target == 255] = 19
-    #     return cls.train_id_to_color[target]
+    # this function is used to visualize the prediction images
+    @classmethod
+    def visualize_prediction(
+        cls, prediction: Optional["Tensor"], ground_truth: Optional["Tensor"]
+    ) -> tuple[Optional["PIL.Image.Image"], Optional["PIL.Image.Image"]]:
+        if prediction is not None:
+            preds = prediction.max(1)[1].detach().cpu().numpy()
+            colorized_preds = cls.decode(preds).astype(
+                "uint8"
+            )  # To RGB images, (N, H, W, 3), ranged 0~255, numpy array
+            colorized_preds = Image.fromarray(colorized_preds[0])  # to PIL Image
+        else:
+            colorized_preds = None
 
-    # # this function is used to visualize the prediction images
-    # @classmethod 
-    # def visualize_prediction(cls,outputs,labels) -> Tuple[Any, Any]:
-    #     """
-    #     Args:
-    #             cls (CityScapes): The class object
-    #             outputs (Tensor): The output of the model
-    #             labels (Tensor): The ground truth labels
-    #     Returns:
-    #             Tuple[Any, Any]: The colorized predictions and the colorized labels
-    #     """
-    #     preds = outputs.max(1)[1].detach().cpu().numpy()
-    #     lab = labels.detach().cpu().numpy()
-    #     colorized_preds = cls.decode(preds).astype('uint8') # To RGB images, (N, H, W, 3), ranged 0~255, numpy array
-    #     colorized_labels = cls.decode(lab).astype('uint8')
-    #     colorized_preds = Image.fromarray(colorized_preds[0]) # to PIL Image
-    #     colorized_labels = Image.fromarray(colorized_labels[0])
-    #     return colorized_preds , colorized_labels
+        if ground_truth is not None:
+            gt = ground_truth.detach().cpu().numpy()
+            colorized_gt = cls.decode(gt).astype("uint8")
+            colorized_gt = Image.fromarray(colorized_gt[0])
+        else:
+            colorized_gt = None
+        return colorized_preds, colorized_gt
+
 
 if __name__ == "__main__":
     train_dataset = Cityscapes(
         CITYSCAPES_BASE_PATH,
         "train",
-        transforms=OurCompose([OurResize(size=[512, 1024]), OurToTensor()]),
+        transforms=OurCompose([OurResize(size=CITYSCAPES_CROP_SIZE), OurToTensor()]),
     )
     ti, tl = train_dataset[9]
     val_dataset = Cityscapes(

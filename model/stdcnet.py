@@ -142,7 +142,6 @@ class STDCNet813(nn.Module):
         self.x32 = nn.Sequential(self.features[6:])
 
         if pretrain_model:
-            print('use pretrain model {}'.format(pretrain_model))
             self.init_weight(pretrain_model)
         else:
             self.init_params()

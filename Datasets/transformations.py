@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import List
+from typing import Callable, List, Sequence
 from torchvision.transforms.v2 import functional as F
 from torchvision.transforms import v2
 import torch
@@ -26,7 +26,7 @@ class OurResize(BaseCustomTransformation):
 
     def __call__(self, image, label):
         return F.resize(image, self.size), F.resize(
-            label, self.size, F.InterpolationMode.NEAREST
+            label, self.size, interpolation=F.InterpolationMode.NEAREST
         )
 
 
@@ -40,7 +40,7 @@ class OurNormalization(BaseCustomTransformation):
 
 
 class OurRandomCrop(BaseCustomTransformation):
-    def __init__(self, size: tuple[int, int]):
+    def __init__(self, size: Sequence[int]):
         self.size = size
 
     def __call__(self, image, label):
@@ -67,7 +67,7 @@ class OurToTensor(BaseCustomTransformation):
 
 class OurCompose(BaseCustomTransformation):
 
-    def __init__(self, transforms: list[BaseCustomTransformation]):
+    def __init__(self, transforms: list[Callable]):
         self.transforms = [] if transforms is None else transforms
 
     def __call__(self, img: OurImageT, lbl: OurLabelT) -> tuple[OurImageT, OurLabelT]:
@@ -139,14 +139,17 @@ class OurColorJitterTransformation(BaseCustomTransformation):
         t2 = [sol_t, gs_t, blur_t]
         t3 = [hue_t, saturation_t]
 
-        applied_t = []
+        applied_transformation_list = []
         if random.random() > 0.5:
-            applied_t.extend(t1)
+            applied_transformation_list.extend(t1)
 
         if random.random() > 0.8:
-            applied_t.extend(t2)
+            applied_transformation_list.extend(t2)
 
         if random.random() > 0.5:
-            applied_t.extend(t3)
+            applied_transformation_list.extend(t3)
 
-        return v2.Compose(applied_t)(image), label
+        if len(applied_transformation_list) == 0:
+            return image, label
+        else:
+            return v2.Compose(applied_transformation_list)(image), label

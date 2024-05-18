@@ -1,10 +1,15 @@
 #!/usr/bin/python
 # -*- encoding: utf-8 -*-
+try:
+    from Domain_Adaptation_for_Semantic_Segmentation.Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE, PROJECT_BASE_PATH  # type: ignore
+except ImportError:
+    from Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE, PROJECT_BASE_PATH  # type: ignore
 import logging
 from datetime import datetime, timedelta
 import math
+from pathlib import Path
 from typing import Literal, Optional
-from Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE
+
 from Datasets.transformations import *
 from model.model_stages import BiSeNet
 import torch
@@ -17,6 +22,7 @@ from tqdm import tqdm
 import os
 from Datasets.cityscapes_torch import Cityscapes
 from Datasets.gta5 import GTA5
+from .options.train_options import parse_args, TrainOptions
 
 from utils import (
     fast_compute_global_accuracy,
@@ -37,9 +43,11 @@ tg_handler.addFilter(filter)
 logging.basicConfig(
     format="%(asctime)s [%(filename)s@%(funcName)s] [%(levelname)s]:> %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(__file__), "..", "logs/debug.log")),
+        logging.FileHandler(
+            os.path.join(PROJECT_BASE_PATH, "logs/debug.log")
+        ),
         logging.StreamHandler(),
-        tg_handler,
+        # tg_handler,
     ],
 )
 logger = logging.getLogger(__name__)
@@ -47,9 +55,12 @@ logger.setLevel(logging.DEBUG)
 
 
 DatasetName = Literal["Cityscapes", "GTA5"]
+Tasks = Literal["2A", "2B", "2C1", "2C2"]
 
 
-def val(args, model, dataloader) -> tuple:
+def val(
+    args: "TrainOptions", model: "torch.nn.Module", dataloader: "DataLoader"
+) -> tuple:
     with torch.no_grad():
         model.eval()
         precision_record = []
@@ -90,9 +101,16 @@ def val(args, model, dataloader) -> tuple:
 
 
 def train(
-    args, model, optimizer, dataloader_train, dataloader_val, training_name: Optional[str] = None
+    args: "TrainOptions",
+    model: "torch.nn.Module",
+    optimizer: "torch.optim.Optimizer",
+    dataloader_train: "DataLoader",
+    dataloader_val: "DataLoader",
+    training_name: Optional[str] = None,
+    writer: Optional["SummaryWriter"] = None
 ):
-    writer = SummaryWriter(comment=f"{training_name}{args.optimizer}")
+    if writer is None:
+        writer = SummaryWriter(comment=f"")
 
     scaler = amp.GradScaler()
 
@@ -109,9 +127,14 @@ def train(
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         max_miou = checkpoint["max_miou"]
-        logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
+        precision = checkpoint.get("precision", 0)
+        logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}, {precision=} {max_miou=}")
 
-    tensorboard_base_name = "epoch/"
+        if start_epoch >= args.num_epochs + 1:
+            logger.warning("Since checkpoint is already complete, skipping training")
+            return
+
+    tensorboard_base_name = f"{training_name}/epoch/"
     best_epoch = 0
     for epoch in range(start_epoch, args.num_epochs + 1):
         ts_start = datetime.today()
@@ -173,6 +196,7 @@ def train(
                     "arch": str(model),
                     "state_dict": model.state_dict(),
                     "max_miou": max_miou,
+                    "precision": precision,
                     "optimizer": optimizer.state_dict(),
                 },
                 args.save_model_path,
@@ -200,6 +224,7 @@ def train(
                         "arch": str(model),
                         "state_dict": model.state_dict(),
                         "max_miou": max_miou,
+                        "precision": precision,
                         "optimizer": optimizer.state_dict(),
                     },
                     args.save_model_path,
@@ -210,96 +235,6 @@ def train(
     )
 
 
-def str2bool(v: str) -> bool:
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Unsupported value encountered.")
-
-
-def parse_args():
-    parse = argparse.ArgumentParser()
-
-    parse.add_argument(
-        "--mode",
-        dest="mode",
-        type=str,
-        default="train",
-        choices=["train", "val_with_best"],
-    )
-
-    parse.add_argument(
-        "--backbone",
-        dest="backbone",
-        type=str,
-        default="CatmodelSmall",
-    )
-    parse.add_argument(
-        "--pretrain_path",
-        dest="pretrain_path",
-        type=str,
-        default="./STDCNet813M_73.91.tar",
-    )
-    parse.add_argument(
-        "--use_conv_last",
-        dest="use_conv_last",
-        type=str2bool,
-        default=False,
-    )
-    parse.add_argument(
-        "--num_epochs", type=int, default=50, help="Number of epochs to train for"
-    )
-    parse.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume from latest checkpoint",
-    )
-    parse.add_argument(
-        "--use_best",
-        action="store_true",
-        help="Use best model for final validation",
-    )
-    parse.add_argument(
-        "--checkpoint_step",
-        type=int,
-        default=1,
-        help="How often to save checkpoints (epochs)",
-    )
-    parse.add_argument(
-        "--validation_step",
-        type=int,
-        default=5,
-        help="How often to perform validation (epochs)",
-    )
-    parse.add_argument(
-        "--batch_size", type=int, default=4, help="Number of images in each batch"
-    )
-    parse.add_argument(
-        "--learning_rate", type=float, default=0.01, help="learning rate used for train"
-    )
-    parse.add_argument("--num_workers", type=int, default=4, help="num of workers")
-    parse.add_argument(
-        "--num_classes", type=int, default=19, help="num of object classes (with void)"
-    )
-    parse.add_argument(
-        "--cuda", type=str, default="0", help="GPU ids used for training"
-    )
-    parse.add_argument(
-        "--use_gpu", type=bool, default=True, help="whether to user gpu for training"
-    )
-    parse.add_argument(
-        "--save_model_path", type=str, default="./results", help="path to save model"
-    )
-    parse.add_argument(
-        "--optimizer",
-        type=str,
-        default="adam",
-        help="optimizer, support rmsprop, sgd, adam",
-    )
-    parse.add_argument("--loss", type=str, default="crossentropy", help="loss function")
-    return parse.parse_args()
 
 
 def main(
@@ -308,20 +243,19 @@ def main(
     *,
     augmentation: bool = False,
     save_model_postfix: str = "",
+    args: Optional[TrainOptions] = None,
+    writer: Optional["SummaryWriter"] = None
 ) -> tuple[float, float]:
-    args = parse_args()
+    if args is None:
+        args = parse_args()
 
     # dataset
     n_classes = args.num_classes
 
-    mode = args.mode
-
     if training_ds_name == "Cityscapes":
         train_dataset = Cityscapes(
-            split="train",
-            transforms=OurCompose(
-                [OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]
-            ),
+            mode="train",
+            transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
         )
     elif training_ds_name == "GTA5":
         if augmentation:
@@ -350,7 +284,7 @@ def main(
     )
 
     if validation_ds_name == "Cityscapes":
-        val_dataset = Cityscapes(split="val", transforms=OurToTensor())
+        val_dataset = Cityscapes(mode="val", transforms=OurToTensor())
     elif validation_ds_name == "GTA5":
         val_dataset = GTA5(mode="val", transforms=OurToTensor())
     else:
@@ -368,12 +302,12 @@ def main(
     model = BiSeNet(
         backbone=args.backbone,
         n_classes=n_classes,
-        pretrain_model=args.pretrain_path,
+        pretrain_model=str(args.pretrain_path),
         use_conv_last=args.use_conv_last,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: " + str(device))
+    logger.debug("Device: " + str(device))
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
@@ -392,13 +326,15 @@ def main(
         logger.critical("not supported optimizer")
         return (0, 0)
 
-    if save_model_postfix == "2C1":
+    if "2C1" in save_model_postfix:
         # IF task 2c.1 -> Re use model of 2b and valuate only on Cityscape directly
-        args.mode = "val_with_best"
-        args.save_model_postfix = "2B"
+        args.mode = "validate_with_best"
+        save_model_postfix = save_model_postfix.replace("2C1", "2B")
 
     if save_model_postfix != "":
-        args.save_model_path = os.path.join(args.save_model_path, save_model_postfix)
+        args.save_model_path = Path(
+            os.path.join(args.save_model_path, save_model_postfix)
+        )
 
     # train loop
     if args.mode == "train":
@@ -409,6 +345,7 @@ def main(
             dataloader_train,
             dataloader_val,
             training_name=save_model_postfix,
+            writer=writer,
         )
     # final test
     if args.mode != "train" or args.use_best:
@@ -421,42 +358,121 @@ def main(
             checkpoint = torch.load(checkpoint_filename)
             start_epoch = checkpoint["epoch"]
             model.load_state_dict(checkpoint["state_dict"])
-            logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
+            logger.info(f"Loaded best checkpoint that was at epoch n. {start_epoch}")
+        else: 
+            raise Exception(f"Trying to train on best but no best exitsts. Looking for {checkpoint_filename}")
 
     return val(args, model, dataloader_val)
 
 
-if __name__ == "__main__":
-    logger.info("tg:Starting MEGA training")
-    # 2a
-    try:
-        logger.info("tg:Starting 2A Training")
-        precision_2a, miou_2a = main(
-            "Cityscapes", "Cityscapes", save_model_postfix="2A"
-        )
-        logger.info(f"tg:2A Results: Precision={precision_2a} Mean IoU={miou_2a}")
-    except Exception as e:
-        logger.critical("tg:Error on 2A", exc_info=e)
-
-    # 2b
-    try:
-        logger.info("tg:Starting 2B Training")
-        precision_2b, miou_2b = main("GTA5", "GTA5", save_model_postfix="2B")
-        logger.info(f"tg:2B Results: Precision={precision_2b} Mean IoU={miou_2b}")
-    except Exception as e:
-        logger.critical("tg:Error on 2B", exc_info=e)
-    # 2c.1
-    try:
-        logger.info("tg:Starting 2C1 Training")
-        precision_2c1, miou_2c1 = main("GTA5", "Cityscapes", save_model_postfix="2C1")
-        logger.info(f"tg:2C1 Results: Precision={precision_2c1} Mean IoU={miou_2c1}")
-    except Exception as e:
-        logger.critical("tg:Error on 2C1", exc_info=e)
-    # 2c.2
-    try:
-        logger.info("tg:Starting 2C2 Training")
-        precision_2c2, miou_2c2 = main("GTA5", "Cityscapes", augmentation=True, save_model_postfix="2C2")
-        logger.info(f"tg:2C2 Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
-    except Exception as e:
-        logger.critical("tg:Error on 2C2", exc_info=e)
 # modified arguemnts: pretrain_path, num_epochs, batch_size, save_model_path
+
+
+def run2A(args: Optional[TrainOptions] = None, name: str = "2A", writer: Optional["SummaryWriter"] = None):
+    if "2A" not in name:
+        name = f"2A/{name}"
+
+    try:
+        logger.info(f"tg:Starting {name} Training")
+        precision_2a, miou_2a = main(
+            "Cityscapes", "Cityscapes", save_model_postfix=name, args=args, writer=writer
+        )
+        logger.info(f"tg:{name} Results: Precision={precision_2a} Mean IoU={miou_2a}")
+    except Exception as e:
+        logger.critical(f"tg:Error on {name}", exc_info=e)
+
+
+def run2B(args: Optional[TrainOptions] = None, name: str = "2B", writer: Optional["SummaryWriter"] = None):
+    if "2B" not in name:
+        name = f"2B/{name}"
+
+    try:
+        logger.info(f"tg:Starting {name} Training")
+        precision_2b, miou_2b = main("GTA5", "GTA5", save_model_postfix=name, args=args, writer=writer)
+        logger.info(f"tg:{name} Results: Precision={precision_2b} Mean IoU={miou_2b}")
+    except Exception as e:
+        logger.critical(f"tg:Error on {name}", exc_info=e)
+
+
+def run2C1(args: Optional[TrainOptions] = None, name: str = "2C1", writer: Optional["SummaryWriter"] = None):
+    if "2C1" not in name:
+        name = f"2C1/{name}"
+
+    try:
+        logger.info(f"tg:Starting {name} Training")
+        precision_2c1, miou_2c1 = main(
+            "GTA5", "Cityscapes", save_model_postfix=name, args=args, writer=writer
+        )
+        logger.info(f"tg:{name} Results: Precision={precision_2c1} Mean IoU={miou_2c1}")
+    except Exception as e:
+        logger.critical(f"tg:Error on {name}", exc_info=e)
+
+
+def run2C2(args: Optional[TrainOptions] = None, name: str = "2C2", writer: Optional["SummaryWriter"] = None):
+    if "2C2" not in name:
+        name = f"2C2/{name}"
+
+    try:
+        logger.info(f"tg:Starting {name} Training")
+        precision_2c2, miou_2c2 = main(
+            "GTA5", "Cityscapes", augmentation=True, save_model_postfix=name, args=args, writer=writer
+        )
+        logger.info(f"tg:{name} Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
+    except Exception as e:
+        logger.critical(f"tg:Error on {name}", exc_info=e)
+
+
+def run(tasks: Optional[dict[Tasks, TrainOptions]] = None):
+    if tasks is None or len(tasks) == 0:
+        # run them all with parsed arguments
+        tasks = {
+            "2A": parse_args(),
+            "2B": parse_args(),
+            "2C1": parse_args(),
+            "2C2": parse_args(),
+        }
+
+    if "2A" in tasks:
+        args = tasks["2A"]
+        run2A(args=args)
+
+    # # 2b
+    if "2B" in tasks:
+        args = tasks["2B"]
+        run2B(args=args)
+
+    # 2c.1
+    if "2C1" in tasks:
+        args = tasks["2C1"]
+        run2C1(args=args)
+
+    # 2c.2
+    if "2C2" in tasks:
+        args = tasks["2C2"]
+        run2C2(args=args)
+
+
+def grid_search():
+    # Batch size: 4 or 6 or 8
+    # Optimizer: SGD, ADAM
+    GRID: dict[str, dict] = {
+        # "SGD-4": {"batch_size": 4, "optimizer": "sgd"},
+        # "SGD-6": {"batch_size": 6, "optimizer": "sgd"},
+        # "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
+        "ADAM-4":{"batch_size": 4, "optimizer": "adam"},
+        # "ADAM-6":{"batch_size": 6, "optimizer": "adam"},
+        # "ADAM-8":{"batch_size": 8, "optimizer": "adam"},
+    }
+    logger.info(f"tg: Starting GRID SEARCH: {list(GRID.keys())}")
+    for name, args in GRID.items():
+        
+        # run2A(args=TrainOptions().from_dict(args), name=f"2A/{name}")
+        run2B(args=TrainOptions().from_dict(args), name=f"2B/{name}")
+    
+
+if __name__ == "__main__":
+    # tasks_to_run: list[Tasks] = ["2C1", "2C2"]
+    # logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
+    # tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
+    # run(tasks=tasks)
+    grid_search()
