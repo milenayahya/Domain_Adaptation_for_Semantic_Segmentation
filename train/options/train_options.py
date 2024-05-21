@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 from tap import Tap
 
 try:
@@ -41,9 +41,9 @@ class TrainOptions(Tap):
     loss: Literal["crossentropy"] = "crossentropy"
     """Loss Function"""
 
-    @staticmethod
-    def default() -> "TrainOptions":
-        return TrainOptions().from_dict({})
+    @classmethod
+    def default(cls) -> "Self":
+        return cls().from_dict({})
 
 def parse_args(*args, **kwargs) -> TrainOptions:
     return TrainOptions().parse_args(*args, **kwargs)

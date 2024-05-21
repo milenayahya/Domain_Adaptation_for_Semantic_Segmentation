@@ -1,23 +1,28 @@
 #!/usr/bin/python
 # -*- encoding: utf-8 -*-
+try:
+    from Domain_Adaptation_for_Semantic_Segmentation.Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE, PROJECT_BASE_PATH  # type: ignore
+except ImportError:
+    from Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE, PROJECT_BASE_PATH  # type: ignore
 import logging
 from datetime import datetime, timedelta
-import math
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Optional
+
+from Datasets.transformations import *
 from model.model_stages import BiSeNet
 import torch
 from torch.utils.data import DataLoader
-import argparse
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch.cuda.amp as amp
 from tqdm import tqdm
 import os
-from Datasets.cityscapes import CityScapes
-from Datasets.gta5 import gta5
+from Datasets.cityscapes_torch import Cityscapes
+from Datasets.gta5 import GTA5
 from model.discriminator import FCDiscriminator
-import torchvision.transforms.functional as F
-import torch.nn.functional as FN
+from .options.train_ada_options import parse_args, TrainADAOptions, TrainOptions
+
 from utils import (
     fast_compute_global_accuracy,
     reverse_one_hot,
@@ -37,7 +42,7 @@ tg_handler.addFilter(filter)
 logging.basicConfig(
     format="%(asctime)s [%(filename)s@%(funcName)s] [%(levelname)s]:> %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(os.path.dirname(__file__), "logs/debug.log")),
+        logging.FileHandler(os.path.join(PROJECT_BASE_PATH, "logs/debug.log")),
         logging.StreamHandler(),
         tg_handler,
     ],
@@ -49,12 +54,25 @@ logger.setLevel(logging.DEBUG)
 DatasetName = Literal["Cityscapes", "GTA5"]
 
 
-def val(args, model, dataloader) -> tuple[float, float]:
+def val(
+    args: "TrainOptions",
+    model: "torch.nn.Module",
+    dataloader: "DataLoader",
+    visualize_images: bool = False,
+    writer: Optional["SummaryWriter"] = None,
+    name: Optional[str] = None,
+    epoch: Optional[int] = None,
+    dataset_name: Optional[DatasetName] = None,
+) -> tuple:
+
+    visualize_img_idx = 0  # random.randrange(0, len(dataloader))
+
     with torch.no_grad():
         model.eval()
         precision_record = []
         hist = np.zeros((args.num_classes, args.num_classes))
-        pbar = tqdm(total=len(dataloader), desc="Evaluation", unit="img")  #progress bar
+        pbar = tqdm(total=len(dataloader), desc="Evaluation", unit="img")
+
         for i, (data, label) in enumerate(dataloader):
             label = label.type(torch.LongTensor)
             data = data.cuda()
@@ -62,6 +80,41 @@ def val(args, model, dataloader) -> tuple[float, float]:
 
             # get RGB predict image
             predict, _, _ = model(data)
+            if (
+                writer is not None
+                and name is not None
+                and epoch is not None
+                and dataset_name is not None
+                and visualize_images
+                and i == visualize_img_idx
+            ):
+                logger.info(
+                    f"Visualizing Prediction of {name}, picked image at index {visualize_img_idx}"
+                )
+                if dataset_name == "Cityscapes":
+                    vp, vl = Cityscapes.visualize_prediction(predict, label)
+                elif dataset_name == "GTA5":
+                    vp, vl = GTA5.visualize_prediction(predict, label)
+                writer.add_image(
+                    f"{name}/prediction",
+                    np.array(vp),
+                    global_step=epoch,
+                    dataformats="HWC",
+                )
+                writer.add_image(
+                    f"{name}/ground_truth",
+                    np.array(vl),
+                    global_step=epoch,
+                    dataformats="HWC",
+                )
+                writer.add_image(
+                    f"{name}/source",
+                    np.array(data[0].cpu()),
+                    global_step=epoch,
+                    dataformats="CHW",
+                )
+                writer.flush()
+
             predict = predict.squeeze(0)
             predict = reverse_one_hot(predict)
             predict = np.array(predict.cpu())
@@ -78,6 +131,7 @@ def val(args, model, dataloader) -> tuple[float, float]:
             # predict = colour_code_segmentation(np.array(predict), label_info)
             # label = colour_code_segmentation(np.array(label), label_info)
             precision_record.append(precision)
+
             pbar.update(1)
 
         precision = np.mean(precision_record)
@@ -86,10 +140,18 @@ def val(args, model, dataloader) -> tuple[float, float]:
         logger.info("Validation: precision per pixel for test: %.3f" % precision)
         logger.info("Validation: mIoU for validation: %.3f" % miou)
         logger.info(f"Validation: mIoU per class:\n{miou_list}")
+        if writer is not None and epoch is not None:
+            writer.add_scalar(
+                f"{name}/precision",
+                precision,
+                epoch,
+                display_name="Precision",
+            )
+            writer.add_scalar(f"{name}/miou", miou, epoch, display_name="Mean IoU")
         return precision, miou
 
 
-'''
+"""
 Assigning source_label = 0 and target_label = 1: The idea is to train the discriminator to classify predictions 
 as either coming from the source domain (assigned label 0) or the target domain (assigned label 1). 
 
@@ -98,44 +160,72 @@ This is achieved by minimizing the binary cross-entropy loss between the discrim
 and the assigned labels (source_label or target_label). 
 As the training progresses, the discriminator becomes less effective at distinguishing between the domains, 
 indicating that the features learned by the model become domain-invariant, which is our goal.
-'''
+"""
+
 
 def train(
-    args, model, modelD, optimizer, optimizerD, dataloader_source, dataloader_target, dataloader_val, training_name: str = None
+    args: "TrainADAOptions",
+    model: "torch.nn.Module",
+    modelD: "torch.nn.Module",
+    optimizer: "torch.optim.Optimizer",
+    optimizerD: "torch.optim.Optimizer",
+    dataloader_source: "DataLoader",
+    dataloader_target: "DataLoader",
+    dataloader_val: "DataLoader",
+    validation_dataset_name: "DatasetName",
+    training_name: Optional[str] = None,
+    writer: Optional["SummaryWriter"] = None,
 ):
-    writer = SummaryWriter(comment=f"{training_name}{args.optimizer}")
+    if writer is None:
+        writer = SummaryWriter(comment=f"")
 
     scaler = amp.GradScaler()
 
     loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
 
-    #bce_loss is minimized to minimize the ability of the discrimnator to distiguish between domains
+    # bce_loss is minimized to minimize the ability of the discrimnator to distiguish between domains
     bce_loss = torch.nn.BCEWithLogitsLoss()
 
     precision, miou = 0, 0
     max_miou = 0
     step = 0
 
-    #the labels which the discriminator will assign
-    source_label= 0
-    target_label= 1
+    # the labels which the discriminator will assign
+    source_label = 0
+    target_label = 1
 
     start_epoch = 1
     checkpoint_filename = os.path.join(args.save_model_path, "latest.tar")
     runs_execution_time = []
     if args.resume and os.path.exists(checkpoint_filename):
-        checkpoint = torch.load(checkpoint_filename)
+        checkpoint: dict = torch.load(checkpoint_filename)
         start_epoch = checkpoint["epoch"]
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
+        model_d_state_dict = checkpoint.get("state_dict_d", None)
+        if model_d_state_dict is not None:
+            modelD.load_state_dict(model_d_state_dict)
+        optimizer_d_state_dict = checkpoint.get("optimizer_d", None)
+        if optimizer_d_state_dict is not None:
+            optimizerD.load_state_dict(optimizer_d_state_dict)
         max_miou = checkpoint["max_miou"]
-        logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
+        precision = checkpoint.get("precision", 0)
+        logger.info(
+            f"Loaded latest checkpoint that was at epoch n. {start_epoch}, {precision=} {max_miou=}"
+        )
 
-    tensorboard_base_name = "epoch/"
+        if start_epoch >= args.num_epochs + 1:
+            logger.warning("Since checkpoint is already complete, skipping training")
+            return
+
+    tensorboard_base_name = (
+        f"{training_name}"
+        if (training_name is None or ("/" not in training_name))
+        else training_name.split("/")[0]
+    )
     best_epoch = 0
     for epoch in range(start_epoch, args.num_epochs + 1):
         ts_start = datetime.today()
-
         lr = poly_lr_scheduler(
             optimizer, args.learning_rate, iter=(epoch - 1), max_iter=args.num_epochs
         )  # epoch-1 because we are now starting from 1
@@ -148,19 +238,24 @@ def train(
 
         tq = tqdm(total=len(dataloader_target) * args.batch_size, unit="img")
         writer.add_scalar(f"{tensorboard_base_name}/learning_rate", lr, epoch)
-        writer.add_scalar(f"{tensorboard_base_name}/learning_rate_discriminator", lr_discriminator, epoch)
-        tq.set_description("epoch %d, lr %f, lr_discriminator %f" (epoch, lr, lr_discriminator))
-
+        writer.add_scalar(
+            f"{tensorboard_base_name}/learning_rate_discriminator",
+            lr_discriminator,
+            epoch,
+        )
+        tq.set_description(f"{epoch=}, {lr=}, {lr_discriminator}")
 
         loss_record = []
-        loss_source_record= []
-        loss_target_record= []
+        loss_source_record = []
+        loss_target_record = []
 
-        for i, ((data, label),(data_target,_)) in zip(dataloader_source, dataloader_target):
+        for i, ((data, label), (data_target, _)) in zip(
+            dataloader_source, dataloader_target
+        ):
 
             data = data.cuda()
             label = label.long().cuda()
-            data_target= data_target().cuda()
+            data_target = data_target().cuda()
 
             optimizer.zero_grad()
             optimizerD.zero_grad()
@@ -178,17 +273,20 @@ def train(
                 loss = loss1 + loss2 + loss3
 
             scaler.scale(loss).backward()
-          
+
             with amp.autocast():
                 output_target, out16_target, out32_target = model(data_target)
-                D_out1 = modelD(FN.softmax(output_target,dim=1)) #peppe-sc
-                #D_out1 = modelD(F.softmax(output_target,dim=1)) #Alessio
+                D_out1 = modelD(torch.softmax(output_target, dim=1))  # peppe-sc
+                # D_out1 = modelD(F.softmax(output_target,dim=1)) #Alessio
 
-                loss_adv_target1= bce_loss(D_out1, torch.FloatTensor(D_out1.data.size()).fill_(source_label).cuda())
-                loss_adv_target = args.lambda_d1*loss_adv_target1
-                
+                loss_adv_target1 = bce_loss(
+                    D_out1,
+                    torch.FloatTensor(D_out1.data.size()).fill_(source_label).cuda(),
+                )
+                loss_adv_target = args.lambda_d1 * loss_adv_target1
+
                 ## in Alessio's repo loss is just loss1+loss2+loss3
-                loss = loss + loss_adv_target #peppe-sc
+                loss = loss + loss_adv_target  # peppe-sc
 
             scaler.scale(loss_adv_target).backward()
 
@@ -200,24 +298,30 @@ def train(
             output = output.detach()
             out16 = out16.detach()
             out32 = out32.detach()
-            
+
             # forward pass: apply softmax to the detached outputs and pass them through the Discriminator to obtain predictions
             with amp.autocast():
-                D_out1= modelD(FN.softmax(output, dim=1))
-                #loss calculation
-                loss_d_source1 = bce_loss(D_out1, torch.FloatTensor(D_out1.data.size()).fill(source_label).cuda())
-            
-            #backward propagation
+                D_out1 = modelD(torch.softmax(output, dim=1))
+                # loss calculation
+                loss_d_source1 = bce_loss(
+                    D_out1,
+                    torch.FloatTensor(D_out1.data.size()).fill_(source_label).cuda(),
+                )
+
+            # backward propagation
             scaler.scale(loss_d_source1).backward()
 
             # same for target domain:
-            output_target= output_target.detach()
-            out16_target= out16_target.detach()
-            out32_target= out32_target.detach()
+            output_target = output_target.detach()
+            out16_target = out16_target.detach()
+            out32_target = out32_target.detach()
 
             with amp.autocast():
-                D_out1 = modelD(FN.softmax(output_target,dim=1))
-                loss_d_target1 = bce_loss(D_out1, torch.FloatTensor(D_out1.data.size()).fill(target_label).cuda())
+                D_out1 = modelD(torch.softmax(output_target, dim=1))
+                loss_d_target1 = bce_loss(
+                    D_out1,
+                    torch.FloatTensor(D_out1.data.size()).fill_(target_label).cuda(),
+                )
 
             scaler.scale(loss_d_target1).backward()
 
@@ -228,11 +332,19 @@ def train(
             tq.update(args.batch_size)
             tq.set_postfix(loss="%.6f" % loss)
             step += 1
-            writer.add_scalar("step/loss", loss, step)
+            writer.add_scalar(
+                f"{tensorboard_base_name}/loss_step",
+                loss,
+                step,
+                display_name="Loss per Step",
+            )
 
-            loss_record.append(loss.item()) # this loss is the loss of the generator for the source and target
-            loss_source_record.append(loss_d_source1.item()) # discriminator loss for source
-            loss_target_record.append(loss_d_target1.item()) # discriminator loss for target
+            # this loss is the loss of the generator for the source and target
+            loss_record.append(loss.item())
+            # discriminator loss for source
+            loss_source_record.append(loss_d_source1.item())
+            # discriminator loss for target
+            loss_target_record.append(loss_d_target1.item())
 
         tq.close()
         loss_train_mean = np.mean(loss_record)
@@ -240,24 +352,27 @@ def train(
         loss_discr_target_mean = np.mean(loss_target_record)
 
         writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_train", float(loss_train_mean), epoch
+            f"{tensorboard_base_name}/loss_epoch_train",
+            float(loss_train_mean),
+            epoch,
+            display_name="Mean Loss per Epoch",
         )
         writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_discr_source", float(loss_discr_source_mean), epoch
+            f"{tensorboard_base_name}/loss_epoch_discr_source",
+            float(loss_discr_source_mean),
+            epoch,
+            display_name="Mean Loss per Epoch (Discrimator Source)",
         )
         writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_discr_target", float(loss_discr_target_mean), epoch
+            f"{tensorboard_base_name}/loss_epoch_discr_target",
+            float(loss_discr_target_mean),
+            epoch,
+            display_name="Mean Loss per Epoch (Discrimator Target)",
         )
 
         ts_duration: timedelta = datetime.today() - ts_start
         logger.info(
-            f"loss for train @ {epoch=}: {loss_train_mean} after {ts_duration.seconds} seconds"
-        )
-        logger.info(
-            f"loss for discriminant on source domain @ {epoch=}: {loss_discr_source_mean} after {ts_duration.seconds} seconds"
-        )
-        logger.info(
-            f"loss for discriminant on target domain @ {epoch=}: {loss_discr_target_mean} after {ts_duration.seconds} seconds"
+            f"loss for train @ {epoch=}: {loss_train_mean=} | {loss_discr_source_mean=} | {loss_discr_target_mean=} after {ts_duration.seconds} seconds"
         )
         runs_execution_time.append(ts_duration.seconds)
         writer.add_scalar(
@@ -268,7 +383,6 @@ def train(
             summary_description="seconds",
         )
 
-
         ## check from 272 to 318 if anything needs to be changed
         if epoch % args.checkpoint_step == 0:
             logger.info(
@@ -277,25 +391,27 @@ def train(
             save_checkpoint(
                 {
                     "epoch": epoch + 1,
-                    "arch": str(model),
                     "state_dict": model.state_dict(),
+                    "state_dict_d": modelD.state_dict(),
                     "max_miou": max_miou,
+                    "precision": precision,
                     "optimizer": optimizer.state_dict(),
+                    "optimizer_d": optimizerD.state_dict(),
                 },
                 args.save_model_path,
                 False,
             )
 
         if epoch % args.validation_step == 0:
-            precision, miou = val(args, model, dataloader_val)
-            writer.add_scalar(
-                f"{tensorboard_base_name}/precision",
-                precision,
-                epoch,
-                display_name="Precision",
-            )
-            writer.add_scalar(
-                f"{tensorboard_base_name}/miou", miou, epoch, display_name="Mean IoU"
+            precision, miou = val(
+                args,
+                model,
+                dataloader_val,
+                writer=writer,
+                name=tensorboard_base_name,
+                epoch=epoch,
+                visualize_images=True,
+                dataset_name=validation_dataset_name,
             )
             if miou > max_miou:
                 max_miou = miou
@@ -304,125 +420,19 @@ def train(
                 save_checkpoint(
                     {
                         "epoch": epoch + 1,
-                        "arch": str(model),
                         "state_dict": model.state_dict(),
+                        "state_dict_d": modelD.state_dict(),
                         "max_miou": max_miou,
+                        "precision": precision,
                         "optimizer": optimizer.state_dict(),
+                        "optimizer_d": optimizerD.state_dict(),
                     },
                     args.save_model_path,
                     True,
                 )
     logger.info(
-        f"tg:Finished training of {training_name} after {sum(runs_execution_time)/len(runs_execution_time)} seconds. Best was reached @ {best_epoch} epoch"
+        f"tg:Finished training of {training_name} after an average of {sum(runs_execution_time)/len(runs_execution_time)} seconds per epoch. Best was reached @ {best_epoch} epoch"
     )
-
-
-def str2bool(v: str) -> bool:
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Unsupported value encountered.")
-
-
-def parse_args():
-    parse = argparse.ArgumentParser()
-
-    parse.add_argument(
-        "--mode",
-        dest="mode",
-        type=str,
-        default="train",
-        choices=["train", "val_with_best"],
-    )
-
-    parse.add_argument(
-        "--backbone",
-        dest="backbone",
-        type=str,
-        default="CatmodelSmall",
-    )
-    parse.add_argument(
-        "--pretrain_path",
-        dest="pretrain_path",
-        type=str,
-        default="./STDCNet813M_73.91.tar",
-    )
-    parse.add_argument(
-        "--use_conv_last",
-        dest="use_conv_last",
-        type=str2bool,
-        default=False,
-    )
-    parse.add_argument(
-        "--num_epochs", type=int, default=50, help="Number of epochs to train for"
-    )
-    parse.add_argument(
-        "--resume",
-        action="store_true",
-        help="Resume from latest checkpoint",
-    )
-    parse.add_argument(
-        "--use_best",
-        action="store_true",
-        help="Use best model for final validation",
-    )
-    parse.add_argument(
-        "--checkpoint_step",
-        type=int,
-        default=1,
-        help="How often to save checkpoints (epochs)",
-    )
-    parse.add_argument(
-        "--validation_step",
-        type=int,
-        default=5,
-        help="How often to perform validation (epochs)",
-    )
-    parse.add_argument(
-        "--batch_size", type=int, default=8, help="Number of images in each batch"
-    )
-    parse.add_argument(
-        "--learning_rate", type=float, default=0.01, help="learning rate used for train"
-    )
-    parse.add_argument('--learning_rate_D',
-                        type=float,
-                        default=0.0001, #default=0.0002,
-                        help='learning rate used for train')
-    parse.add_argument("--num_workers", type=int, default=4, help="num of workers")
-    parse.add_argument(
-        "--num_classes", type=int, default=19, help="num of object classes (with void)"
-    )
-    parse.add_argument(
-        "--cuda", type=str, default="0", help="GPU ids used for training"
-    )
-    parse.add_argument(
-        "--use_gpu", type=bool, default=True, help="whether to user gpu for training"
-    )
-    parse.add_argument(
-        "--save_model_path", type=str, default="./results", help="path to save model"
-    )
-    parse.add_argument(
-        "--optimizer",
-        type=str,
-        default="sgd",
-        help="optimizer, support rmsprop, sgd, adam",
-    )
-    parse.add_argument("--loss", type=str, default="crossentropy", help="loss function")
-    parse.add_argument('--lambda_d1',
-                       type=float,
-                       default=0.001,
-                       help='lambda for adversarial loss')
-    parse.add_argument('--lambda_d2',
-                       type=float,
-                       default=0.0002,
-                       help='lambda for adversarial loss')
-    parse.add_argument('--lambda_d3',
-                       type=float,
-                       default=0.0002,
-                       help='lambda for adversarial loss')
-    return parse.parse_args()
 
 
 def main(
@@ -432,22 +442,37 @@ def main(
     *,
     augmentation: bool = False,
     save_model_postfix: str = "",
+    args: Optional["TrainADAOptions"] = None,
+    writer: Optional["SummaryWriter"] = None,
 ) -> tuple[float, float]:
     args = parse_args()
 
     # dataset
     n_classes = args.num_classes
 
-    mode = args.mode
-
     # Source dataset
     if source_ds_name == "Cityscapes":
-        source_dataset = CityScapes("train")
+        source_dataset = Cityscapes(
+            mode="train",
+            transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
+        )
     elif source_ds_name == "GTA5":
-        source_dataset = gta5("train", aug=augmentation)
+        if augmentation:
+            transformations = OurCompose(
+                [
+                    OurToTensor(),
+                    OurRandomCrop(GTA5_CROP_SIZE),
+                    OurGeometricAugmentationTransformations(),
+                    OurColorJitterTransformation(),
+                ]
+            )
+        else:
+            transformations = OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor()])
+
+        source_dataset = GTA5("train", transforms=transformations)
     else:
         raise ValueError("Dataset non valido")
-    
+
     dataloader_source = DataLoader(
         source_dataset,
         batch_size=args.batch_size,
@@ -459,12 +484,27 @@ def main(
 
     # Target dataset
     if target_ds_name == "Cityscapes":
-        target_dataset = CityScapes(mode="train")
+        target_dataset = Cityscapes(
+            mode="train",
+            transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
+        )
     elif target_ds_name == "GTA5":
-        target_dataset = gta5(mode="train")
+        if augmentation:
+            transformations = OurCompose(
+                [
+                    OurToTensor(),
+                    OurRandomCrop(GTA5_CROP_SIZE),
+                    OurGeometricAugmentationTransformations(),
+                    OurColorJitterTransformation(),
+                ]
+            )
+        else:
+            transformations = OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor()])
+
+        target_dataset = GTA5("train", transforms=transformations)
     else:
         raise ValueError("Dataset non valido")
-    
+
     dataloader_target = DataLoader(
         target_dataset,
         batch_size=args.batch_size,
@@ -473,15 +513,14 @@ def main(
         pin_memory=False,
         drop_last=True,
     )
-    
+
     # Validation dataset
     if validation_ds_name == "Cityscapes":
-        val_dataset = CityScapes(mode="val")
+        val_dataset = Cityscapes(mode="val", transforms=OurToTensor())
     elif validation_ds_name == "GTA5":
-        val_dataset = gta5(mode="val")
+        val_dataset = GTA5(mode="val", transforms=OurToTensor())
     else:
         raise ValueError("Dataset non valido")
-
 
     dataloader_val = DataLoader(
         val_dataset,
@@ -495,16 +534,16 @@ def main(
     model = BiSeNet(
         backbone=args.backbone,
         n_classes=n_classes,
-        pretrain_model=args.pretrain_path,
+        pretrain_model=str(args.pretrain_path),
         use_conv_last=args.use_conv_last,
     )
 
     # Discriminator model
-    model_D = FCDiscriminator(num_classes=args.num_classses)
+    model_D = FCDiscriminator(num_classes=args.num_classes)
     # create more instances to implement multi-level discriminator
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: " + str(device))
+    logger.debug("Device: " + str(device))
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
@@ -522,13 +561,16 @@ def main(
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
         logger.critical("not supported optimizer")
-        return None
-    
-    optimizer_D = torch.optim.Adam(model_D.parameters(), lr= args.learning_rate_D,betas=(0.9,0.99))
+        return (-1, -1)
 
+    optimizer_D = torch.optim.Adam(
+        model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99)
+    )
 
     if save_model_postfix != "":
-        args.save_model_path = os.path.join(args.save_model_path, save_model_postfix)
+        args.save_model_path = Path(
+            os.path.join(args.save_model_path, save_model_postfix)
+        )
 
     # train loop
     if args.mode == "train":
@@ -542,37 +584,86 @@ def main(
             dataloader_target,
             dataloader_val,
             training_name=save_model_postfix,
+            writer=writer,
+            validation_dataset_name=validation_ds_name,
         )
 
     # final test
+    checkpoint_filename = None
+    checkpoint = None
     if args.mode != "train" or args.use_best:
         checkpoint_filename = os.path.join(args.save_model_path, "best.tar")
-        logger.info(f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}")
+        logger.info(
+            f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}"
+        )
         # Load Best before final evaluation
         if os.path.exists(checkpoint_filename):
             checkpoint = torch.load(checkpoint_filename)
             start_epoch = checkpoint["epoch"]
             model.load_state_dict(checkpoint["state_dict"])
-            logger.info(f"Loaded latest checkpoint that was at epoch n. {start_epoch}")
+            logger.info(f"Loaded best checkpoint that was at epoch n. {start_epoch}")
+        else:
+            raise Exception(
+                f"Trying to train on best but no best exitsts. Looking for {checkpoint_filename}"
+            )
 
-    return val(args, model, dataloader_val)
+    precision, max_miou = val(
+        args,
+        model,
+        dataloader_val,
+        writer=writer,
+        name=save_model_postfix,
+        visualize_images=True,
+        epoch=args.num_epochs + 10,  # above anything, final validation
+        dataset_name=validation_ds_name,
+    )
+
+    # Save again best model, but with updated precision and max_miou
+    if (
+        checkpoint_filename is not None
+        and checkpoint is not None
+        and os.path.exists(checkpoint_filename)
+    ):
+        checkpoint["precision"] = precision
+        checkpoint["max_miou"] = max_miou
+        if "name" not in checkpoint.keys():
+            checkpoint["name"] = save_model_postfix
+        save_checkpoint(checkpoint, args.save_model_path, True)
+
+    return precision, max_miou
 
 
 if __name__ == "__main__":
-    
+
     logger.info("tg:Starting MEGA ADA")
     try:
         logger.info("tg:Starting task 3: ADA, GTA5 -> Cityscapes")
-        precision_3, miou_3 = main("GTA5", "Cityscapes", "Cityscapes", save_model_postfix="3")
+        writer = SummaryWriter(comment="task_3")
+        precision_3, miou_3 = main(
+            "GTA5",
+            "Cityscapes",
+            "Cityscapes",
+            save_model_postfix="3/normal",
+            writer=writer,
+        )
         logger.info(f"tg:3 Results: Precision={precision_3} Mean IoU={miou_3}")
     except Exception as e:
-        logger.critical("tg:Error on 3", exc_info=e)
+        logger.critical("tg:Error on 3GCC", exc_info=e)
 
-    
     try:
         logger.info("tg:Starting task 3: ADA, GTA5+aug -> Cityscapes")
-        precision_3_aug, miou_3_aug = main("GTA5", "Cityscapes", "Cityscapes",augmentation=True, save_model_postfix="3_aug")
-        logger.info(f"tg:3_aug Results: Precision={precision_3_aug} Mean IoU={miou_3_aug}")
+        writer = SummaryWriter(comment="task_3_aug")
+        precision_3_aug, miou_3_aug = main(
+            "GTA5",
+            "Cityscapes",
+            "Cityscapes",
+            augmentation=True,
+            save_model_postfix="3/aug",
+            writer=writer,
+        )
+        logger.info(
+            f"tg:3_aug Results: Precision={precision_3_aug} Mean IoU={miou_3_aug}"
+        )
     except Exception as e:
         logger.critical("tg:Error on 3_aug", exc_info=e)
 
@@ -580,15 +671,11 @@ if __name__ == "__main__":
 # Doubts:
 
 # use F.softmax or FN.softmax to compute output of models ?
+# -> Using torch.softmax
 
 # Training Generator loss: do we add the discriminator loss (peppe-sc) or not (Alessio) ?
 
-# check from 272 to 318 if anything needs to be changed
-
-# check from 548 to 556 if anything needs to be changed
-
-# should we implement the multilevel discriminator (D1, D2, D3) ? -> multiple instances of discriminator, 
+# should we implement the multilevel discriminator (D1, D2, D3) ? -> multiple instances of discriminator,
 # each uses outputs from a different level of the NN ?
 
 # we could hypertune lambda, as for the moment we only use lambda_d1
-
