@@ -6,7 +6,6 @@ except ImportError:
     from Datasets import CITYSCAPES_CROP_SIZE, GTA5_CROP_SIZE, PROJECT_BASE_PATH  # type: ignore
 import logging
 from datetime import datetime, timedelta
-import math
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -14,7 +13,6 @@ from Datasets.transformations import *
 from model.model_stages import BiSeNet
 import torch
 from torch.utils.data import DataLoader
-import argparse
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch.cuda.amp as amp
@@ -45,7 +43,7 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(os.path.join(PROJECT_BASE_PATH, "logs/debug.log")),
         logging.StreamHandler(),
-        # tg_handler,
+        tg_handler,
     ],
 )
 logger = logging.getLogger(__name__)
@@ -142,6 +140,14 @@ def val(
         logger.info("Validation: precision per pixel for test: %.3f" % precision)
         logger.info("Validation: mIoU for validation: %.3f" % miou)
         logger.info(f"Validation: mIoU per class:\n{miou_list}")
+        if writer is not None and epoch is not None:
+            writer.add_scalar(
+                f"{name}/precision",
+                precision,
+                epoch,
+                display_name="Precision",
+            )
+            writer.add_scalar(f"{name}/miou", miou, epoch, display_name="Mean IoU")
         return precision, miou
 
 
@@ -151,6 +157,7 @@ def train(
     optimizer: "torch.optim.Optimizer",
     dataloader_train: "DataLoader",
     dataloader_val: "DataLoader",
+    validation_dataset_name: "DatasetName",
     training_name: Optional[str] = None,
     writer: Optional["SummaryWriter"] = None,
 ):
@@ -181,7 +188,11 @@ def train(
             logger.warning("Since checkpoint is already complete, skipping training")
             return
 
-    tensorboard_base_name = f"{training_name}/"
+    tensorboard_base_name = (
+        f"{training_name}"
+        if (training_name is None or ("/" not in training_name))
+        else training_name.split("/")[0]
+    )
     best_epoch = 0
     for epoch in range(start_epoch, args.num_epochs + 1):
         ts_start = datetime.today()
@@ -248,7 +259,6 @@ def train(
             save_checkpoint(
                 {
                     "epoch": epoch + 1,
-                    "arch": str(model),
                     "state_dict": model.state_dict(),
                     "max_miou": max_miou,
                     "precision": precision,
@@ -265,23 +275,10 @@ def train(
                 model,
                 dataloader_val,
                 writer=writer,
-                name=training_name,
+                name=tensorboard_base_name,
                 epoch=epoch,
                 visualize_images=True,
-                dataset_name=(
-                    "Cityscapes"
-                    if (training_name is not None and not "2B" in training_name)
-                    else "GTA5"
-                ),
-            )
-            writer.add_scalar(
-                f"{tensorboard_base_name}/precision",
-                precision,
-                epoch,
-                display_name="Precision",
-            )
-            writer.add_scalar(
-                f"{tensorboard_base_name}/miou", miou, epoch, display_name="Mean IoU"
+                dataset_name=validation_dataset_name,
             )
             if miou > max_miou:
                 max_miou = miou
@@ -290,7 +287,6 @@ def train(
                 save_checkpoint(
                     {
                         "epoch": epoch + 1,
-                        "arch": str(model),
                         "state_dict": model.state_dict(),
                         "max_miou": max_miou,
                         "precision": precision,
@@ -351,6 +347,7 @@ def main(
         drop_last=True,
     )
 
+    # Validation dataset
     if validation_ds_name == "Cityscapes":
         val_dataset = Cityscapes(mode="val", transforms=OurToTensor())
     elif validation_ds_name == "GTA5":
@@ -392,7 +389,7 @@ def main(
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
         logger.critical("not supported optimizer")
-        return (0, 0)
+        return (-1, -1)
 
     if "2C1" in save_model_postfix:
         # IF task 2c.1 -> Re use model of 2b and valuate only on Cityscape directly
@@ -414,6 +411,7 @@ def main(
             dataloader_val,
             training_name=save_model_postfix,
             writer=writer,
+            validation_dataset_name=validation_ds_name,
         )
     # final test
     checkpoint_filename = None
@@ -545,53 +543,57 @@ def run(tasks: Optional[dict[Tasks, TrainOptions]] = None):
     if tasks is None or len(tasks) == 0:
         # run them all with parsed arguments
         tasks = {
-            "2A": parse_args(),
-            "2B": parse_args(),
-            "2C1": parse_args(),
-            "2C2": parse_args(),
+            "2A": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
+            "2B": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
+            "2C1": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
+            "2C2": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
         }
 
     if "2A" in tasks:
         args = tasks["2A"]
-        run2A(args=args)
+        writer = SummaryWriter(comment="BEST_EVAL_2A_SGD-6")
+        run2A(args=args, name="2A/SGD-6", writer=writer)
 
     # # 2b
     if "2B" in tasks:
         args = tasks["2B"]
-        run2B(args=args)
+        writer = SummaryWriter(comment="BEST_EVAL_2B_SGD-6")
+        run2B(args=args, name="2B/SGD-6", writer=writer)
 
     # 2c.1
     if "2C1" in tasks:
         args = tasks["2C1"]
-        run2C1(args=args)
+        writer = SummaryWriter(comment="BEST_EVAL_2C1_SGD-6")
+        run2C1(args=args, name="2C1/SGD-6", writer=writer)
 
     # 2c.2
     if "2C2" in tasks:
         args = tasks["2C2"]
-        run2C2(args=args)
+        writer = SummaryWriter(comment="BEST_EVAL_2C2_SGD-6")
+        run2C2(args=args, name="2C2/SGD-6", writer=writer)
 
 
 def grid_search():
     # Batch size: 4 or 6 or 8
     # Optimizer: SGD, ADAM
     GRID: dict[str, dict] = {
-        "ADAM-4": {"batch_size": 4, "optimizer": "adam"}, # Already done
+        "ADAM-4": {"batch_size": 4, "optimizer": "adam"},
         "SGD-4": {"batch_size": 4, "optimizer": "sgd"},
-        "ADAM-6":{"batch_size": 6, "optimizer": "adam"},
+        "ADAM-6": {"batch_size": 6, "optimizer": "adam"},
         "SGD-6": {"batch_size": 6, "optimizer": "sgd"},
-        "ADAM-8":{"batch_size": 8, "optimizer": "adam"},
-        "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
+        # "ADAM-8": {"batch_size": 8, "optimizer": "adam"}, # Skipped, too slow
+        # "SGD-8": {"batch_size": 8, "optimizer": "sgd"}, # Skipped, too slow
     }
     logger.info(f"tg: Starting GRID SEARCH: {list(GRID.keys())}")
-    writer = SummaryWriter(comment=f"_GRID_SEARCH_OVER_NIGHT")
     for name, args in GRID.items():
+        writer = SummaryWriter(comment=f"_GRID_SEARCH_OVER_NIGHT_{name}")
         run2A(args=TrainOptions().from_dict(args), name=f"2A/{name}", writer=writer)
         run2B(args=TrainOptions().from_dict(args), name=f"2B/{name}", writer=writer)
 
 
 if __name__ == "__main__":
-    # tasks_to_run: list[Tasks] = ["2C1", "2C2"]
-    # logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
-    # tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
-    # run(tasks=tasks)
-    grid_search()
+    tasks_to_run: list[Tasks] = ["2C1", "2C2"]
+    logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
+    tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
+    run(tasks=tasks)
+    # grid_search()
