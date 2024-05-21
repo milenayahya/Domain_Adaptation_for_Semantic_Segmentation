@@ -445,7 +445,8 @@ def main(
     args: Optional["TrainADAOptions"] = None,
     writer: Optional["SummaryWriter"] = None,
 ) -> tuple[float, float]:
-    args = parse_args()
+    if args is None:
+        args = parse_args()
 
     # dataset
     n_classes = args.num_classes
