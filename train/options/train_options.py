@@ -17,7 +17,7 @@ class TrainOptions(Tap):
     resume: bool = True
     """Resume from latest checkpoint"""
     use_best: bool = True
-    """Use best model for final validation"""
+    """Use best model for final validation, use latest otherwise"""
     checkpoint_step: int = 1
     """How often to save checkpoints (epochs)"""
     validation_step: int = 5

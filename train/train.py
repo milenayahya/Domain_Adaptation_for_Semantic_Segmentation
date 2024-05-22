@@ -7,7 +7,7 @@ except ImportError:
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from Datasets.transformations import *
 from model.model_stages import BiSeNet
@@ -417,23 +417,21 @@ def main(
         )
         
     # final test
-    checkpoint_filename = None
-    checkpoint = None
-    if args.mode != "train" or args.use_best:
-        checkpoint_filename = os.path.join(args.save_model_path, "best.tar")
-        logger.info(
-            f"Performing final evaluation with the best model saved in the following checkpoint: {checkpoint_filename}"
+    checkpoint_filename = os.path.join(args.save_model_path, "best.tar" if args.use_best else "latest.tar")
+    logger.info(
+        f"Performing final evaluation with the {args.use_best and "best" or "latest"} model saved in the following checkpoint: {checkpoint_filename}"
+    )
+    # Load Best before final evaluation
+    checkpoint: dict[str, Any]
+    if not os.path.exists(checkpoint_filename):
+        raise Exception(
+            f"Trying to train on {args.use_best and "best" or "latest"} but it doesn't exitsts. Looking for {checkpoint_filename}"
         )
-        # Load Best before final evaluation
-        if os.path.exists(checkpoint_filename):
-            checkpoint = torch.load(checkpoint_filename)
-            start_epoch = checkpoint["epoch"]
-            model.load_state_dict(checkpoint["state_dict"])
-            logger.info(f"Loaded best checkpoint that was at epoch n. {start_epoch}")
-        else:
-            raise Exception(
-                f"Trying to train on best but no best exitsts. Looking for {checkpoint_filename}"
-            )
+    
+    checkpoint = torch.load(checkpoint_filename)
+    start_epoch = checkpoint["epoch"]
+    model.load_state_dict(checkpoint["state_dict"])
+    logger.info(f"Loaded {args.use_best and "best" or "latest"} checkpoint that was at epoch n. {start_epoch-1}")
 
     precision, max_miou = val(
         args,
