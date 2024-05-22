@@ -351,9 +351,9 @@ def main(
 
     # Validation dataset
     if validation_ds_name == "Cityscapes":
-        val_dataset = Cityscapes(mode="val", transforms=OurToTensor())
+        val_dataset = Cityscapes(mode="val", transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]))
     elif validation_ds_name == "GTA5":
-        val_dataset = GTA5(mode="val", transforms=OurToTensor())
+        val_dataset = GTA5(mode="val", transforms=OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor()]))
     else:
         raise ValueError("Dataset non valido")
 
@@ -552,26 +552,26 @@ def run(tasks: Optional[dict[Tasks, TrainOptions]] = None):
 
     if "2A" in tasks:
         args = tasks["2A"]
-        writer = SummaryWriter(comment="BEST_EVAL_2A_SGD-6")
-        run2A(args=args, name="2A/SGD-6", writer=writer)
+        writer = SummaryWriter(comment="BEST_EVAL_2A_VR-SGD-6")
+        run2A(args=args, name="2A/VR-SGD-6", writer=writer)
 
     # # 2b
     if "2B" in tasks:
         args = tasks["2B"]
-        writer = SummaryWriter(comment="BEST_EVAL_2B_SGD-6")
-        run2B(args=args, name="2B/SGD-6", writer=writer)
+        writer = SummaryWriter(comment="BEST_EVAL_2B_VR-SGD-6")
+        run2B(args=args, name="2B/VR-SGD-6", writer=writer)
 
     # 2c.1
     if "2C1" in tasks:
         args = tasks["2C1"]
-        writer = SummaryWriter(comment="BEST_EVAL_2C1_SGD-6")
-        run2C1(args=args, name="2C1/SGD-6", writer=writer)
+        writer = SummaryWriter(comment="BEST_EVAL_2C1_VR-SGD-6")
+        run2C1(args=args, name="2C1/VR-SGD-6", writer=writer)
 
     # 2c.2
     if "2C2" in tasks:
         args = tasks["2C2"]
-        writer = SummaryWriter(comment="BEST_EVAL_2C2_SGD-6")
-        run2C2(args=args, name="2C2/SGD-6", writer=writer)
+        writer = SummaryWriter(comment="BEST_EVAL_2C2_VR-SGD-6")
+        run2C2(args=args, name="2C2/VR-SGD-6", writer=writer)
 
 
 def grid_search():
@@ -593,7 +593,7 @@ def grid_search():
 
 
 if __name__ == "__main__":
-    tasks_to_run: list[Tasks] = ["2C1", "2C2"]
+    tasks_to_run: list[Tasks] = ["2A", "2B", "2C1", "2C2"]
     logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
     tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
     run(tasks=tasks)

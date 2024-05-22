@@ -28,7 +28,7 @@ class GTA5(Dataset):
         self,
         mode: Literal["train", "val"],
         load_mode: Literal["instant", "on_request"] = "on_request",
-        transforms=None,
+        transforms: Optional[Callable]=None,
     ):
         super(GTA5, self).__init__()
 
