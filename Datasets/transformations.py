@@ -1,4 +1,4 @@
-from abc import ABC
+from abc import ABC #Abstract Base Class
 from typing import Callable, List, Sequence
 from torchvision.transforms.v2 import functional as F
 from torchvision.transforms import v2
@@ -19,6 +19,8 @@ class BaseCustomTransformation(ABC):
     ) -> tuple["OurImageT", "OurLabelT"]:
         return image, label
 
+
+# the following classes inherit from the Base Class so they all have a common interface
 
 class OurResize(BaseCustomTransformation):
     def __init__(self, size: list[int]):

@@ -80,6 +80,8 @@ def val(
 
             # get RGB predict image
             predict, _, _ = model(data)
+
+            # visualizing images and writing logs
             if (
                 writer is not None
                 and name is not None
@@ -413,6 +415,7 @@ def main(
             writer=writer,
             validation_dataset_name=validation_ds_name,
         )
+        
     # final test
     checkpoint_filename = None
     checkpoint = None

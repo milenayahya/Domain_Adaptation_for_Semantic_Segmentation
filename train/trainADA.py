@@ -80,6 +80,8 @@ def val(
 
             # get RGB predict image
             predict, _, _ = model(data)
+
+            # visualzizing an image and logging
             if (
                 writer is not None
                 and name is not None
@@ -383,7 +385,6 @@ def train(
             summary_description="seconds",
         )
 
-        ## check from 272 to 318 if anything needs to be changed
         if epoch % args.checkpoint_step == 0:
             logger.info(
                 f"Saving latest checkpoint @ {epoch=}, with max_miou (of latest val) = {max_miou}"

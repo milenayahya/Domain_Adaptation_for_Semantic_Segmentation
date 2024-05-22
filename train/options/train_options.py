@@ -1,6 +1,6 @@
 from pathlib import Path
-from typing import Literal, Self
-from tap import Tap
+from typing import Literal, Self #for type hinting
+from tap import Tap #for command-line argument-parsing
 
 try:
     from Domain_Adaptation_for_Semantic_Segmentation.Datasets import PROJECT_BASE_PATH
@@ -41,11 +41,13 @@ class TrainOptions(Tap):
     loss: Literal["crossentropy"] = "crossentropy"
     """Loss Function"""
 
-    @classmethod
+    @classmethod  #returns an instance of "TrainOptions" with deafult values
     def default(cls) -> "Self":
         return cls().from_dict({})
 
-def parse_args(*args, **kwargs) -> TrainOptions:
+
+# creates an instance of TrainOptions and parses the command-line arguments
+def parse_args(*args, **kwargs) -> TrainOptions: 
     return TrainOptions().parse_args(*args, **kwargs)
 
 
