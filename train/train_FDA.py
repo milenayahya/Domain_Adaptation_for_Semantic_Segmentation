@@ -52,6 +52,7 @@ logger.setLevel(logging.DEBUG)
 
 DatasetName = Literal["Cityscapes", "GTA5"]
 
+# MAYBE SHOULD USE IMAGENET MEAN??? INVESTIGATE THIS
 IMG_MEAN = np.array((104.00698793, 116.66876762, 122.67891434), dtype=np.float32)
 IMG_MEAN = torch.reshape(torch.from_numpy(IMG_MEAN), (1, 3, 1, 1))
 
@@ -234,7 +235,7 @@ def train(
 
             # 2. subtract mean
             data = src_in_trg.clone() - mean_img
-            if(step == random_step_to_visualize):
+            if step == random_step_to_visualize:
                 # Extract single image from batch of both data_copy and data
                 data_copy_vis = data_copy[:, :, 0:1, :]
                 data_vis = data[:, :, 0:1, :]
@@ -262,7 +263,7 @@ def train(
 
                 # CALCULATE ENTROPY LOSS HERE
                 if epoch > args.switch_to_entropy_after_epoch:
-                    # 2. subtract mean also here, but only when needed.. 
+                    # 2. subtract mean also here, but only when needed..
                     # is it expensive? not sure but it costs nothing to try
                     data_target = trg_in_trg.clone() - mean_img
                     target_output, _, _ = model(data_target)
