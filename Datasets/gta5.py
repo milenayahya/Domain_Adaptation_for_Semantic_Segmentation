@@ -10,9 +10,9 @@ from torch import Tensor
 
 from .cityscapes_torch import Cityscapes
 
-from .transformations import OurCompose, OurToTensor
+from .transformations import OurCompose, OurNormalization, OurToTensor
 from .augmentation import augment
-from . import GTA5_BASE_PATH
+from . import GTA5_BASE_PATH, GTA5_CROP_SIZE
 import logging
 
 logger = logging.getLogger(__name__)
@@ -131,7 +131,9 @@ class GTA5(Dataset):
 
 if __name__ == "__main__":
 
-    train_dataset = GTA5("train")
+    train_dataset = GTA5("train", transforms=OurToTensor())
+    n_train_dataset = GTA5("train", transforms=OurCompose([OurToTensor(), OurNormalization()]))
     ti, tl = train_dataset[4]
+    ni, nl = n_train_dataset[4]
     val_dataset = GTA5("val", transforms=OurToTensor())
     vi, vl = val_dataset[4]

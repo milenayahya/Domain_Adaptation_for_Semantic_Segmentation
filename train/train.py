@@ -7,6 +7,7 @@ except ImportError:
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from pprint import pformat
 from typing import Any, Literal, Optional
 
 from Datasets.transformations import *
@@ -321,20 +322,25 @@ def main(
     if training_ds_name == "Cityscapes":
         train_dataset = Cityscapes(
             mode="train",
-            transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
+            transforms=OurCompose(
+                [OurResize(CITYSCAPES_CROP_SIZE), OurToTensor(), OurNormalization()]
+            ),
         )
     elif training_ds_name == "GTA5":
         if augmentation:
             transformations = OurCompose(
                 [
                     OurToTensor(),
+                    OurNormalization(),
                     OurRandomCrop(GTA5_CROP_SIZE),
                     OurGeometricAugmentationTransformations(),
                     OurColorJitterTransformation(),
                 ]
             )
         else:
-            transformations = OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor()])
+            transformations = OurCompose(
+                [OurResize(GTA5_CROP_SIZE), OurToTensor(), OurNormalization()]
+            )
 
         train_dataset = GTA5("train", transforms=transformations)
     else:
@@ -351,9 +357,19 @@ def main(
 
     # Validation dataset
     if validation_ds_name == "Cityscapes":
-        val_dataset = Cityscapes(mode="val", transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]))
+        val_dataset = Cityscapes(
+            mode="val",
+            transforms=OurCompose(
+                [OurResize(CITYSCAPES_CROP_SIZE), OurToTensor(), OurNormalization()]
+            ),
+        )
     elif validation_ds_name == "GTA5":
-        val_dataset = GTA5(mode="val", transforms=OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor()]))
+        val_dataset = GTA5(
+            mode="val",
+            transforms=OurCompose(
+                [OurResize(GTA5_CROP_SIZE), OurToTensor(), OurNormalization()]
+            ),
+        )
     else:
         raise ValueError("Dataset non valido")
 
@@ -415,9 +431,11 @@ def main(
             writer=writer,
             validation_dataset_name=validation_ds_name,
         )
-        
+
     # final test
-    checkpoint_filename = os.path.join(args.save_model_path, "best.tar" if args.use_best else "latest.tar")
+    checkpoint_filename = os.path.join(
+        args.save_model_path, "best.tar" if args.use_best else "latest.tar"
+    )
     logger.info(
         f"Performing final evaluation with the {args.use_best and "best" or "latest"} model saved in the following checkpoint: {checkpoint_filename}"
     )
@@ -427,11 +445,13 @@ def main(
         raise Exception(
             f"Trying to train on {args.use_best and "best" or "latest"} but it doesn't exitsts. Looking for {checkpoint_filename}"
         )
-    
+
     checkpoint = torch.load(checkpoint_filename)
     start_epoch = checkpoint["epoch"]
     model.load_state_dict(checkpoint["state_dict"])
-    logger.info(f"Loaded {args.use_best and "best" or "latest"} checkpoint that was at epoch n. {start_epoch-1}")
+    logger.info(
+        f"Loaded {args.use_best and "best" or "latest"} checkpoint that was at epoch n. {start_epoch-1}"
+    )
 
     precision, max_miou = val(
         args,
@@ -466,19 +486,20 @@ def run2A(
 ):
     if "2A" not in name:
         name = f"2A/{name}"
-
+    precision, miou = None, None
     try:
         logger.info(f"tg:Starting {name} Training")
-        precision_2a, miou_2a = main(
+        precision, miou = main(
             "Cityscapes",
             "Cityscapes",
             save_model_postfix=name,
             args=args,
             writer=writer,
         )
-        logger.info(f"tg:{name} Results: Precision={precision_2a} Mean IoU={miou_2a}")
+        logger.info(f"tg:{name} Results: Precision={precision} Mean IoU={miou}")
     except Exception as e:
         logger.critical(f"tg:Error on {name}", exc_info=e)
+    return {"precision": precision, "miou": miou}
 
 
 def run2B(
@@ -488,15 +509,16 @@ def run2B(
 ):
     if "2B" not in name:
         name = f"2B/{name}"
-
+    precision, miou = None, None
     try:
         logger.info(f"tg:Starting {name} Training")
-        precision_2b, miou_2b = main(
+        precision, miou = main(
             "GTA5", "GTA5", save_model_postfix=name, args=args, writer=writer
         )
-        logger.info(f"tg:{name} Results: Precision={precision_2b} Mean IoU={miou_2b}")
+        logger.info(f"tg:{name} Results: Precision={precision} Mean IoU={miou}")
     except Exception as e:
         logger.critical(f"tg:Error on {name}", exc_info=e)
+    return {"precision": precision, "miou": miou}
 
 
 def run2C1(
@@ -506,15 +528,16 @@ def run2C1(
 ):
     if "2C1" not in name:
         name = f"2C1/{name}"
-
+    precision, miou = None, None
     try:
         logger.info(f"tg:Starting {name} Training")
-        precision_2c1, miou_2c1 = main(
+        precision, miou = main(
             "GTA5", "Cityscapes", save_model_postfix=name, args=args, writer=writer
         )
-        logger.info(f"tg:{name} Results: Precision={precision_2c1} Mean IoU={miou_2c1}")
+        logger.info(f"tg:{name} Results: Precision={precision} Mean IoU={miou}")
     except Exception as e:
         logger.critical(f"tg:Error on {name}", exc_info=e)
+    return {"precision": precision, "miou": miou}
 
 
 def run2C2(
@@ -524,10 +547,10 @@ def run2C2(
 ):
     if "2C2" not in name:
         name = f"2C2/{name}"
-
+    precision, miou = None, None
     try:
         logger.info(f"tg:Starting {name} Training")
-        precision_2c2, miou_2c2 = main(
+        precision, miou = main(
             "GTA5",
             "Cityscapes",
             augmentation=True,
@@ -535,9 +558,10 @@ def run2C2(
             args=args,
             writer=writer,
         )
-        logger.info(f"tg:{name} Results: Precision={precision_2c2} Mean IoU={miou_2c2}")
+        logger.info(f"tg:{name} Results: Precision={precision} Mean IoU={miou}")
     except Exception as e:
         logger.critical(f"tg:Error on {name}", exc_info=e)
+    return {"precision": precision, "miou": miou}
 
 
 def run(tasks: Optional[dict[Tasks, TrainOptions]] = None):
@@ -580,16 +604,29 @@ def grid_search():
     GRID: dict[str, dict] = {
         "ADAM-4": {"batch_size": 4, "optimizer": "adam"},
         "SGD-4": {"batch_size": 4, "optimizer": "sgd"},
+        "RMS-4": {"batch_size": 4, "optimizer": "rmsprop"},
         "ADAM-6": {"batch_size": 6, "optimizer": "adam"},
         "SGD-6": {"batch_size": 6, "optimizer": "sgd"},
-        # "ADAM-8": {"batch_size": 8, "optimizer": "adam"}, # Skipped, too slow
-        # "SGD-8": {"batch_size": 8, "optimizer": "sgd"}, # Skipped, too slow
+        "RMS-6": {"batch_size": 6, "optimizer": "rmsprop"},
+        "ADAM-2": {"batch_size": 2, "optimizer": "adam"},
+        "SGD-2": {"batch_size": 2, "optimizer": "sgd"},
+        "RMS-2": {"batch_size": 2, "optimizer": "rmsprop"},
+        "ADAM-8": {"batch_size": 8, "optimizer": "adam"},
+        "SGD-8": {"batch_size": 8, "optimizer": "sgd"},
+        "RMS-8": {"batch_size": 8, "optimizer": "rmsprop"},
     }
+    RES_2A: dict[str, dict[str, Optional[float]]] = dict()
+    RES_2B: dict[str, dict[str, Optional[float]]] = dict()
     logger.info(f"tg: Starting GRID SEARCH: {list(GRID.keys())}")
     for name, args in GRID.items():
-        writer = SummaryWriter(comment=f"_GRID_SEARCH_OVER_NIGHT_{name}")
-        run2A(args=TrainOptions().from_dict(args), name=f"2A/{name}", writer=writer)
-        run2B(args=TrainOptions().from_dict(args), name=f"2B/{name}", writer=writer)
+        writer = SummaryWriter(comment=f"_BIGGEST_GRID_SEARCH_OVER_NIGHT_{name}")
+        RES_2A[name] = run2A(
+            args=TrainOptions().from_dict(args), name=f"2A/{name}", writer=writer
+        )
+        RES_2B[name] = run2B(
+            args=TrainOptions().from_dict(args), name=f"2B/{name}", writer=writer
+        )
+    logger.info(f"tg: Finished GRID SEARCH:\n{pformat(RES_2A, indent=2, underscore_numbers=True)}\n{pformat(RES_2B, indent=2, underscore_numbers=True)}")
 
 
 if __name__ == "__main__":

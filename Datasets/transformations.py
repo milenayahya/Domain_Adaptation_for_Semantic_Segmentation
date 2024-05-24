@@ -1,4 +1,4 @@
-from abc import ABC #Abstract Base Class
+from abc import ABC  # Abstract Base Class
 from typing import Callable, List, Sequence
 from torchvision.transforms.v2 import functional as F
 from torchvision.transforms import v2
@@ -8,6 +8,9 @@ import random
 
 OurImageT = torch.Tensor
 OurLabelT = torch.Tensor
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 class BaseCustomTransformation(ABC):
@@ -22,23 +25,24 @@ class BaseCustomTransformation(ABC):
 
 # the following classes inherit from the Base Class so they all have a common interface
 
+
 class OurResize(BaseCustomTransformation):
-    def __init__(self, size: list[int]):
+    def __init__(self, size: Sequence[int]):
         self.size = size
 
     def __call__(self, image, label):
-        return F.resize(image, self.size), F.resize(
-            label, self.size, interpolation=F.InterpolationMode.NEAREST
+        return F.resize(image, list(self.size)), F.resize(
+            label, list(self.size), interpolation=F.InterpolationMode.NEAREST
         )
 
 
 class OurNormalization(BaseCustomTransformation):
-    def __init__(self, mean: list[float], std: list[float]):
+    def __init__(self, mean: Sequence[float] = IMAGENET_MEAN, std: Sequence[float] = IMAGENET_STD):
         self.mean = mean
         self.std = std
 
     def __call__(self, image, label):
-        return F.normalize(image, self.mean, self.std), label
+        return F.normalize(image, list(self.mean), list(self.std)), label
 
 
 class OurRandomCrop(BaseCustomTransformation):
