@@ -458,7 +458,7 @@ def main(
         model,
         dataloader_val,
         writer=writer,
-        name=save_model_postfix,
+        name=save_model_postfix.split("/")[0],
         visualize_images=True,
         epoch=args.num_epochs + 10,  # above anything, final validation
         dataset_name=validation_ds_name,
@@ -630,8 +630,8 @@ def grid_search():
 
 
 if __name__ == "__main__":
-    tasks_to_run: list[Tasks] = ["2A", "2B", "2C1", "2C2"]
-    logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
-    tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
-    run(tasks=tasks)
-    # grid_search()
+    # tasks_to_run: list[Tasks] = ["2A", "2B", "2C1", "2C2"]
+    # logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
+    # tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
+    # run(tasks=tasks)
+    grid_search()

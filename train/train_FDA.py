@@ -106,18 +106,20 @@ def val(
                     global_step=epoch,
                     dataformats="HWC",
                 )
-                writer.add_image(
-                    f"{name}/ground_truth",
-                    np.array(vl),
-                    global_step=epoch,
-                    dataformats="HWC",
-                )
-                writer.add_image(
-                    f"{name}/source",
-                    np.array(data[0].cpu()),
-                    global_step=epoch,
-                    dataformats="CHW",
-                )
+                # Do it once, since this doesn't change
+                if epoch <= 5 or epoch > 52:
+                    writer.add_image(
+                        f"{name}/ground_truth",
+                        np.array(vl),
+                        global_step=epoch,
+                        dataformats="HWC",
+                    )
+                    writer.add_image(
+                        f"{name}/source",
+                        np.array(data[0].cpu()),
+                        global_step=epoch,
+                        dataformats="CHW",
+                    )
                 writer.flush()
 
             predict = predict.squeeze(0)
@@ -212,7 +214,7 @@ def train(
         tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
         steps_to_do = min(len(dataloader_train), len(dataloader_target))
-        random_step_to_visualize = random.randrange(0, steps_to_do) + step
+        random_step_to_visualize = 0 # random.randrange(0, steps_to_do) + step
         for it_train, it_target in zip(dataloader_train, dataloader_target):
             data, label = it_train
 
@@ -233,8 +235,6 @@ def train(
             src_in_trg = FDA_source_to_target(data, data_target, L=args.fda_beta)
             trg_in_trg = data_target
 
-            # 2. subtract mean
-            data = src_in_trg.clone() - mean_img
             if step == random_step_to_visualize:
                 # Extract single image from batch of both data_copy and data
                 data_copy_vis = data_copy[:, :, 0:1, :]
@@ -253,6 +253,9 @@ def train(
                     dataformats="CHW",
                 )
                 writer.flush()
+
+            # 2. subtract mean
+            data = src_in_trg.clone() - mean_img
 
             with amp.autocast():
                 output, out16, out32 = model(data)
@@ -490,7 +493,7 @@ def main(
         model,
         dataloader_val,
         writer=writer,
-        name=save_model_postfix,
+        name=save_model_postfix.split("/")[0],
         visualize_images=True,
         epoch=args.num_epochs + 10,  # above anything, final validation
         dataset_name="Cityscapes",
@@ -509,3 +512,11 @@ def main(
         save_checkpoint(checkpoint, args.save_model_path, True)
 
     return precision, max_miou
+
+def run():
+    args = TrainFDAOptions().from_dict({**(TrainFDAOptions().as_dict())})
+    main(
+        args=args,
+        save_model_postfix="FDA/default",
+        writer=None,
+    )

@@ -36,7 +36,7 @@ class TrainOptions(Tap):
     """Use GPU for training"""
     save_model_path: Path = Path(PROJECT_BASE_PATH) / Path("./results")
     """Path to save model checkpoints"""
-    optimizer: Literal["rmsprop", "sgd", "adam"] = "adam"
+    optimizer: Literal["rmsprop", "sgd", "adam"] = "sgd"
     """Optimizer"""
     loss: Literal["crossentropy"] = "crossentropy"
     """Loss Function"""
