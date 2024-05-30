@@ -161,6 +161,7 @@ class Cityscapes(VisionDataset):
         mode: Literal["train", "val"] = "train",
         target_type: Union[List[str], str] = "semantic",
         transforms: Optional[Callable] = None,
+        max_iter: Optional[int] = None,
     ) -> None:
         transform = None
         target_transform = None
@@ -207,6 +208,17 @@ class Cityscapes(VisionDataset):
 
                 self.images.append(os.path.join(img_dir, file_name))
                 self.targets.append(target_types)
+
+        if max_iter is not None:
+            if max_iter > len(self.images):
+                # duplicate images and targets
+                self.images = self.images * (max_iter // len(self.images))
+                self.targets = self.targets * (max_iter // len(self.targets))
+                self.images += self.images[: max_iter % len(self.images)]
+                self.targets += self.targets[: max_iter % len(self.targets)]
+            else:
+                self.images = self.images[:max_iter]
+                self.targets = self.targets[:max_iter]
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
         """
@@ -291,7 +303,7 @@ if __name__ == "__main__":
     train_dataset = Cityscapes(
         CITYSCAPES_BASE_PATH,
         "train",
-        transforms=OurCompose([OurResize(size=CITYSCAPES_CROP_SIZE), OurToTensor()]),
+        transforms=OurCompose([OurResize(size=CITYSCAPES_CROP_SIZE), OurToTensor()]), max_iter=1998
     )
     ti, tl = train_dataset[9]
     val_dataset = Cityscapes(

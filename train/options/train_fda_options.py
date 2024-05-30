@@ -1,10 +1,10 @@
-from train_options import TrainOptions
+from .train_options import TrainOptions
 
 
 class TrainFDAOptions(TrainOptions):
     """Training Options for FDA task"""
 
-    fda_beta: float = 0.01
+    fda_beta: float = 0.005
     """FDA's Beta value, used to determine how mich of the amplitude to 'transfer' from target to source image"""
 
     eta: float = 2
@@ -17,7 +17,7 @@ class TrainFDAOptions(TrainOptions):
     ent_loss_scaling: float = 1.6e-6
     """Entropy Loss Scaling hyperparameter"""
 
-    switch_to_entropy_after_epoch: int = 20 
+    switch_to_entropy_after_epoch: int = 0 
     """Switch to entropy loss after this many epochs"""
 
 

@@ -26,7 +26,7 @@ def low_freq_mutate(amp_src, amp_trg, L=0.1):
     return amp_src
 
 
-def FDA_source_to_target(src_img, trg_img, L=0.1):
+def FDA_source_to_target(src_img: "torch.Tensor", trg_img: "torch.Tensor", L=0.1) -> "torch.Tensor":
     """
     This function performs Frequency Domain Adaptation (FDA) on the source image using the target image.
     FDA aims to transfer the style of the target image to the source image while preserving the content.

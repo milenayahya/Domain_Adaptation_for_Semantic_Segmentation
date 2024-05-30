@@ -7,6 +7,7 @@ except ImportError:
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from pprint import pformat
 from typing import Any, Literal, Optional
 
 from Datasets.transformations import *
@@ -43,7 +44,7 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(os.path.join(PROJECT_BASE_PATH, "logs/debug.log")),
         logging.StreamHandler(),
-        tg_handler,
+        # tg_handler,
     ],
 )
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ logger.setLevel(logging.DEBUG)
 DatasetName = Literal["Cityscapes", "GTA5"]
 
 # MAYBE SHOULD USE IMAGENET MEAN??? INVESTIGATE THIS
-IMG_MEAN = np.array((104.00698793, 116.66876762, 122.67891434), dtype=np.float32)
+IMG_MEAN = np.array(IMAGENET_MEAN, dtype=np.float32)
 IMG_MEAN = torch.reshape(torch.from_numpy(IMG_MEAN), (1, 3, 1, 1))
 
 
@@ -170,7 +171,7 @@ def train(
     writer: Optional["SummaryWriter"] = None,
 ):
     if writer is None:
-        writer = SummaryWriter(comment=f"")
+        writer = SummaryWriter(comment=f"FDA")
 
     scaler = amp.GradScaler()
 
@@ -214,22 +215,17 @@ def train(
         tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
         steps_to_do = min(len(dataloader_train), len(dataloader_target))
-        random_step_to_visualize = 0 # random.randrange(0, steps_to_do) + step
+        random_step_to_visualize = random.randrange(0, steps_to_do) + step
         for it_train, it_target in zip(dataloader_train, dataloader_target):
             data, label = it_train
 
-            data_target, _ = it_target  # Used for entropy loss
+            data_target, label_target = it_target  # Used for entropy loss
 
-            data = data.cuda()
-            data_copy = data.clone()
-            label = label.long().cuda()
+            data: "torch.Tensor" = data.cuda()
+            label: "torch.Tensor" = label.long().cuda()
 
             optimizer.zero_grad()
 
-            # Image preprocessing before feeding to the model
-            if mean_img.shape[-1] < 2:
-                B, C, H, W = data.shape
-                mean_img = IMG_MEAN.repeat(B, 1, H, W)  # type: ignore
 
             # 1. source to target, target to target
             src_in_trg = FDA_source_to_target(data, data_target, L=args.fda_beta)
@@ -237,8 +233,10 @@ def train(
 
             if step == random_step_to_visualize:
                 # Extract single image from batch of both data_copy and data
-                data_copy_vis = data_copy[:, :, 0:1, :]
-                data_vis = data[:, :, 0:1, :]
+                data_copy_vis: "torch.Tensor" = data.clone()[0, :, :, :]
+                data_vis: "torch.Tensor" = src_in_trg.clone()[0, :, :, :]
+                data_copy_vis = data_copy_vis.cpu()
+                data_vis = data_vis.cpu()
                 # Now log it via writer
                 writer.add_image(
                     f"{tensorboard_base_name}/fda_visualization_pre",
@@ -253,9 +251,10 @@ def train(
                     dataformats="CHW",
                 )
                 writer.flush()
+                logger.debug("Visualizing FDA source to target")
 
-            # 2. subtract mean
-            data = src_in_trg.clone() - mean_img
+            # 2. normalize after Fourier transform
+            data, label = OurNormalization()(src_in_trg, label)
 
             with amp.autocast():
                 output, out16, out32 = model(data)
@@ -266,9 +265,8 @@ def train(
 
                 # CALCULATE ENTROPY LOSS HERE
                 if epoch > args.switch_to_entropy_after_epoch:
-                    # 2. subtract mean also here, but only when needed..
-                    # is it expensive? not sure but it costs nothing to try
-                    data_target = trg_in_trg.clone() - mean_img
+                    # 2. Normalize after Fourier transform
+                    data_target, label_target = OurNormalization()(trg_in_trg, label_target)
                     target_output, _, _ = model(data_target)
                     target_loss = FDAEntropyLoss(target_output, args.eta)
                     loss = loss + args.ent_loss_scaling * target_loss
@@ -388,6 +386,7 @@ def main(
     target_dataset = Cityscapes(
         mode="train",
         transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
+        max_iter=len(train_dataset)
     )
 
     dataloader_train = DataLoader(
@@ -401,7 +400,7 @@ def main(
     dataloader_target = DataLoader(
         target_dataset,
         batch_size=args.batch_size,
-        shuffle=False,
+        shuffle=True,
         num_workers=args.num_workers,
         pin_memory=False,
         drop_last=True,
@@ -514,9 +513,17 @@ def main(
     return precision, max_miou
 
 def run():
-    args = TrainFDAOptions().from_dict({**(TrainFDAOptions().as_dict())})
-    main(
+    args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
+    return main(
         args=args,
-        save_model_postfix="FDA/default",
+        save_model_postfix="FDA/SGD-6",
         writer=None,
     )
+
+if __name__ == "__main__":
+    logger.info("tg:Running FDA/SGD-6")
+    try:
+        res = run()
+        logger.info(f"tg:FDA/SGD-6: {pformat(res)}")
+    except Exception as exc:
+        logger.exception("tg:FDA/SGD-6", exc_info=exc)
