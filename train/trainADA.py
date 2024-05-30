@@ -250,14 +250,16 @@ def train(
         loss_record = []
         loss_source_record = []
         loss_target_record = []
-
-        for i, ((data, label), (data_target, _)) in zip(
+        data: "torch.Tensor"
+        data_target: "torch.Tensor"
+        label: "torch.Tensor"
+        for ((data, label), (data_target, _)) in zip(
             dataloader_source, dataloader_target
         ):
 
             data = data.cuda()
             label = label.long().cuda()
-            data_target = data_target().cuda()
+            data_target = data_target.cuda()
 
             optimizer.zero_grad()
             optimizerD.zero_grad()
@@ -612,7 +614,7 @@ def main(
         model,
         dataloader_val,
         writer=writer,
-        name=save_model_postfix,
+        name=save_model_postfix.split("/")[0],
         visualize_images=True,
         epoch=args.num_epochs + 10,  # above anything, final validation
         dataset_name=validation_ds_name,
@@ -638,13 +640,14 @@ if __name__ == "__main__":
     logger.info("tg:Starting MEGA ADA")
     try:
         logger.info("tg:Starting task 3: ADA, GTA5 -> Cityscapes")
-        writer = SummaryWriter(comment="task_3")
+        writer = SummaryWriter(comment="task_3_normal")
         precision_3, miou_3 = main(
             "GTA5",
             "Cityscapes",
             "Cityscapes",
             save_model_postfix="3/normal",
             writer=writer,
+            args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
         )
         logger.info(f"tg:3 Results: Precision={precision_3} Mean IoU={miou_3}")
     except Exception as e:
@@ -660,6 +663,7 @@ if __name__ == "__main__":
             augmentation=True,
             save_model_postfix="3/aug",
             writer=writer,
+            args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
         )
         logger.info(
             f"tg:3_aug Results: Precision={precision_3_aug} Mean IoU={miou_3_aug}"

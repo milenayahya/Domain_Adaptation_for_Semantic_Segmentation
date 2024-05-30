@@ -44,7 +44,7 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(os.path.join(PROJECT_BASE_PATH, "logs/debug.log")),
         logging.StreamHandler(),
-        # tg_handler,
+        tg_handler,
     ],
 )
 logger = logging.getLogger(__name__)

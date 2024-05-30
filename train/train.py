@@ -469,6 +469,7 @@ def main(
         checkpoint_filename is not None
         and checkpoint is not None
         and os.path.exists(checkpoint_filename)
+        and args.mode == "train"
     ):
         checkpoint["precision"] = precision
         checkpoint["max_miou"] = max_miou
@@ -568,35 +569,39 @@ def run(tasks: Optional[dict[Tasks, TrainOptions]] = None):
     if tasks is None or len(tasks) == 0:
         # run them all with parsed arguments
         tasks = {
-            "2A": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
-            "2B": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
+            "2A": TrainOptions().from_dict({"batch_size": 4, "optimizer": "sgd"}),
+            "2B": TrainOptions().from_dict({"batch_size": 4, "optimizer": "sgd"}),
             "2C1": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
             "2C2": TrainOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
         }
-
+    results: dict[str, Any] = dict()
     if "2A" in tasks:
         args = tasks["2A"]
         writer = SummaryWriter(comment="BEST_EVAL_2A_VR-SGD-6")
-        run2A(args=args, name="2A/VR-SGD-6", writer=writer)
-
+        res = run2A(args=args, name="2A/VR-SGD-6", writer=writer)
+        results["2A"] = res
     # # 2b
     if "2B" in tasks:
         args = tasks["2B"]
         writer = SummaryWriter(comment="BEST_EVAL_2B_VR-SGD-6")
-        run2B(args=args, name="2B/VR-SGD-6", writer=writer)
+        res = run2B(args=args, name="2B/VR-SGD-6", writer=writer)
+        results["2B"] = res
 
     # 2c.1
     if "2C1" in tasks:
         args = tasks["2C1"]
-        writer = SummaryWriter(comment="BEST_EVAL_2C1_VR-SGD-6")
-        run2C1(args=args, name="2C1/VR-SGD-6", writer=writer)
+        writer = SummaryWriter(comment="BEST_EVAL_2C1_SGD-6")
+        res = run2C1(args=args, name="2C1/SGD-6", writer=writer)
+        results["2C1"] = res
 
     # 2c.2
     if "2C2" in tasks:
         args = tasks["2C2"]
-        writer = SummaryWriter(comment="BEST_EVAL_2C2_VR-SGD-6")
-        run2C2(args=args, name="2C2/VR-SGD-6", writer=writer)
+        writer = SummaryWriter(comment="BEST_EVAL_2C2_SGD-6")
+        res = run2C2(args=args, name="2C2/SGD-6", writer=writer)
+        results["2C2"] = res
 
+    return results
 
 def grid_search():
     # Batch size: 4 or 6 or 8
@@ -630,8 +635,9 @@ def grid_search():
 
 
 if __name__ == "__main__":
-    # tasks_to_run: list[Tasks] = ["2A", "2B", "2C1", "2C2"]
-    # logger.info(f"tg:Starting the following TASKS: {tasks_to_run}")
-    # tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
-    # run(tasks=tasks)
-    grid_search()
+    tasks_to_run: list[Tasks] = ["2C1", "2C2"]
+    logger.info(f"tg:Starting the following TASKS: {tasks_to_run} on SGD-6")
+    tasks: dict[Tasks, TrainOptions] = {t: parse_args() for t in tasks_to_run}
+    res = run(tasks=tasks)
+    logger.info(f"tg:Finished the following TASKS: {tasks_to_run}, results: {pformat(res, indent=2, underscore_numbers=True)}")
+    # grid_search()

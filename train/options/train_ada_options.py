@@ -1,10 +1,9 @@
-from typing import Self
-from train_options import TrainOptions
+from .train_options import TrainOptions
 
 
 class TrainADAOptions(TrainOptions):
     learning_rate_D: float = 0.0001
-    """ learning rate used for train """
+    """ learning rate used for train of the discriminator """
 
     lambda_d1: float = 0.001
     """lambda for adversarial loss"""
@@ -22,6 +21,7 @@ def parse_args(*args, **kwargs) -> TrainADAOptions:
 
 if __name__ == "__main__":
     from pprint import pprint
+
     args = parse_args()
     pprint(args)
     pprint(args.as_dict())
