@@ -640,12 +640,12 @@ if __name__ == "__main__":
     logger.info("tg:Starting MEGA ADA")
     try:
         logger.info("tg:Starting task 3: ADA, GTA5 -> Cityscapes")
-        writer = SummaryWriter(comment="task_3_normal")
+        writer = SummaryWriter(comment="task_3_SGD6_normal")
         precision_3, miou_3 = main(
             "GTA5",
             "Cityscapes",
             "Cityscapes",
-            save_model_postfix="3/normal",
+            save_model_postfix="3/SGD-6-normal",
             writer=writer,
             args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
         )
@@ -655,13 +655,13 @@ if __name__ == "__main__":
 
     try:
         logger.info("tg:Starting task 3: ADA, GTA5+aug -> Cityscapes")
-        writer = SummaryWriter(comment="task_3_aug")
+        writer = SummaryWriter(comment="task_3_SGD6_aug")
         precision_3_aug, miou_3_aug = main(
             "GTA5",
             "Cityscapes",
             "Cityscapes",
             augmentation=True,
-            save_model_postfix="3/aug",
+            save_model_postfix="3/SGD-6-aug",
             writer=writer,
             args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
         )

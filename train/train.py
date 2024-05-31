@@ -531,7 +531,7 @@ def run2C1(
         name = f"2C1/{name}"
     precision, miou = None, None
     try:
-        logger.info(f"tg:Starting {name} Training")
+        logger.info(f"tg:Starting {name} valuation")
         precision, miou = main(
             "GTA5", "Cityscapes", save_model_postfix=name, args=args, writer=writer
         )

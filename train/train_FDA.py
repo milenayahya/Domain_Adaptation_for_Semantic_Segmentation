@@ -512,18 +512,30 @@ def main(
 
     return precision, max_miou
 
-def run():
-    args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
+def run(args: Optional[TrainFDAOptions] = None, writer: Optional["SummaryWriter"] = None):
+    if args is None:
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
     return main(
         args=args,
         save_model_postfix="FDA/SGD-6",
-        writer=None,
+        writer=writer,
     )
 
 if __name__ == "__main__":
     logger.info("tg:Running FDA/SGD-6")
+
+    name = "FDA/SGD-6-006"
     try:
-        res = run()
-        logger.info(f"tg:FDA/SGD-6: {pformat(res)}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.006}) # will give me a b=1
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
     except Exception as exc:
-        logger.exception("tg:FDA/SGD-6", exc_info=exc)
+        logger.exception(f"tg:{name}", exc_info=exc)
+    
+    name = "FDA/SGD-6-01"
+    try:
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01}) # will give me a b=2
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
