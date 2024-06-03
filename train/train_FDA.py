@@ -561,3 +561,39 @@ if __name__ == "__main__":
     #     logger.info(f"tg:{name} Results: {pformat(res)}")
     # except Exception as exc:
     #     logger.exception(f"tg:{name}", exc_info=exc)
+    
+    name = "FDA/SST-6-006"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.006, "use_sst": True}) # will give me a b=3
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = "FDA/SST-4-006"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.006, "use_sst": True}) # will give me a b=3
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = "FDA/SST-6-01"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01, "use_sst": True}) # will give me a b=3
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = "FDA/SST-4-01"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.01, "use_sst": True}) # will give me a b=3
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
