@@ -1,12 +1,6 @@
 # Main Reference: https://github.com/YanchaoYang/FDA/blob/master/utils/__init__.py
 import torch
 import numpy as np
-import numpy.typing as npt
-from typing import TYPE_CHECKING
-
-from .model_stages import BiSeNet
-
-from ..train.options.train_options import TrainOptions
 
 # Using the implementation provided in this issue, https://github.com/YanchaoYang/FDA/issues/40
 # since the original implementation was compatible with an older version of PyTorch.
