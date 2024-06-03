@@ -20,6 +20,9 @@ class TrainFDAOptions(TrainOptions):
     switch_to_entropy_after_epoch: int = 20
     """Switch to entropy loss after this many epochs"""
 
+    use_sst: bool = False
+    """Whether to use SST loss or not"""
+
 
 def parse_args(*args, **kwargs) -> TrainFDAOptions:
     return TrainFDAOptions().parse_args(*args, **kwargs)

@@ -34,7 +34,7 @@ class Cityscapes(VisionDataset):
             and ``gtFine`` or ``gtCoarse`` are located.
         split (string, optional): The image split to use, ``train``, ``test`` or ``val`` if mode="fine"
             otherwise ``train``, ``train_extra`` or ``val``
-        mode (string, optional): The quality mode to use, ``fine`` or ``coarse``
+        mode (string, optional): The quality mode to use, ``gtFine`` or ``pseudo``
         target_type (string or list, optional): Type of target to use, ``instance``, ``semantic``, ``polygon``
             or ``color``. Can also be a list to output a tuple with all specified target types.
         transform (callable, optional): A function/transform that takes in a PIL image
@@ -159,6 +159,7 @@ class Cityscapes(VisionDataset):
         self,
         root: Optional[Union[str, Path]] = CITYSCAPES_BASE_PATH,
         mode: Literal["train", "val"] = "train",
+        labels: Literal["gtFine", "pseudo"] = "gtFine",
         target_type: Union[List[str], str] = "semantic",
         transforms: Optional[Callable] = None,
         max_iter: Optional[int] = None,
@@ -166,7 +167,7 @@ class Cityscapes(VisionDataset):
         transform = None
         target_transform = None
         super().__init__(str(root), transforms, transform, target_transform)
-        self.mode = "gtFine"
+        self.mode = labels
         self.images_dir = os.path.join(os.path.abspath(self.root), "images", mode)
         self.targets_dir = os.path.join(os.path.abspath(self.root), self.mode, mode)
         self.target_type = target_type
@@ -306,26 +307,32 @@ if __name__ == "__main__":
         transforms=OurCompose([OurResize(size=CITYSCAPES_CROP_SIZE), OurToTensor()]), max_iter=1998
     )
     ti, tl = train_dataset[9]
-    val_dataset = Cityscapes(
-        CITYSCAPES_BASE_PATH, "val", transforms=OurCompose([OurToTensor()])
-    )
-    vi, vl = val_dataset[2]
-
-    non_random = Cityscapes(
-        CITYSCAPES_BASE_PATH, "val", transforms=OurCompose([OurToTensor()])
-    )
-
-    with_random = Cityscapes(
+    pseudo_dataset = Cityscapes(
         CITYSCAPES_BASE_PATH,
-        "val",
-        transforms=OurCompose(
-            [
-                OurToTensor(),
-                OurRandomCrop(CITYSCAPES_CROP_SIZE),
-                OurGeometricAugmentationTransformations(),
-                OurColorJitterTransformation(),
-            ]
-        ),
+        "train", labels="pseudo",
+        transforms=OurCompose([OurResize(size=CITYSCAPES_CROP_SIZE), OurToTensor()]), max_iter=1998
     )
-    ni, nl = non_random[1]
-    wi, wl = with_random[1]
+    pi, pl = pseudo_dataset[9]
+    # val_dataset = Cityscapes(
+    #     CITYSCAPES_BASE_PATH, "val", transforms=OurCompose([OurToTensor()])
+    # )
+    # vi, vl = val_dataset[2]
+
+    # non_random = Cityscapes(
+    #     CITYSCAPES_BASE_PATH, "val", transforms=OurCompose([OurToTensor()])
+    # )
+
+    # with_random = Cityscapes(
+    #     CITYSCAPES_BASE_PATH,
+    #     "val",
+    #     transforms=OurCompose(
+    #         [
+    #             OurToTensor(),
+    #             OurRandomCrop(CITYSCAPES_CROP_SIZE),
+    #             OurGeometricAugmentationTransformations(),
+    #             OurColorJitterTransformation(),
+    #         ]
+    #     ),
+    # )
+    # ni, nl = non_random[1]
+    # wi, wl = with_random[1]

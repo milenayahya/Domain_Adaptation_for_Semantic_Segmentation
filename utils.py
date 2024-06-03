@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
-from typing import Union
+from pprint import pprint
+from typing import Literal, Union
 import torch.nn as nn
 import torch
 from torch.nn import functional as F
@@ -13,6 +14,7 @@ import numbers
 import torchvision
 import os
 import logging
+from train.options.train_options import TrainOptions
 
 logger = logging.getLogger(__name__)
 
@@ -340,9 +342,139 @@ def save_checkpoint(state: dict, base_path: Union[str, Path], is_best: bool):
             continue
         try:
             s = str(v)
-            textable[k] = s[0:100] # If it's longer than 100 maybe we don't need it
+            textable[k] = s[0:100]  # If it's longer than 100 maybe we don't need it
         except:
             pass
     with open(filename + ".json", "w") as f:
         json.dump(textable, f, indent=4)
     logger.info("Saved checkpoint")
+
+
+def createCityscapesPseudoLabels(
+    args: "TrainOptions",
+    models_paths: list[str],
+    split: Literal["train", "val"] = "train",
+):
+    # Tweaked from https://github.com/YanchaoYang/FDA/blob/master/getSudoLabel_multi.py
+    from tqdm import tqdm
+    from model.model_stages import BiSeNet
+    from Datasets.cityscapes_torch import Cityscapes, CITYSCAPES_BASE_PATH
+    import torch
+    from torch.utils.data import DataLoader
+    from Datasets.transformations import (
+        OurCompose,
+        OurNormalization,
+        OurToTensor,
+    )
+    from PIL.Image import Resampling
+
+    assert len(models_paths) == 3, "Must specify exactly 3 models"
+
+    models = []
+    for model_path in models_paths:
+        checkpoint = torch.load(model_path)
+        model = BiSeNet(
+            backbone=args.backbone,
+            n_classes=args.num_classes,
+            pretrain_model=str(args.pretrain_path),
+            use_conv_last=args.use_conv_last,
+        )
+        if torch.cuda.is_available() and args.use_gpu:
+            model = torch.nn.DataParallel(model).cuda()
+        model.load_state_dict(checkpoint["state_dict"])
+        model.eval()
+        models.append(model)
+        name, epoch = checkpoint["name"], checkpoint["epoch"]
+        print(f"Loaded model from {model_path}, {name=} at epoch {epoch}")
+
+    model1, model2, model3 = models[0], models[1], models[2]
+
+    cityscapes_dataset = Cityscapes(
+        mode=split, transforms=OurCompose([OurToTensor(), OurNormalization()])
+    )
+    PSEUDO_LABELS_PATH = os.path.join(CITYSCAPES_BASE_PATH, "pseudo", split)
+    os.makedirs(PSEUDO_LABELS_PATH, exist_ok=True)
+    dataloader = DataLoader(cityscapes_dataset, 1, shuffle=False)
+    predicted_label = []
+    predicted_prob = []
+    image_name = []
+    with torch.no_grad():
+        for i, data in tqdm(
+            enumerate(dataloader),
+            desc="Evaluating Pseudo Labels",
+            unit="img",
+            total=len(cityscapes_dataset),
+        ):
+            image, label = data
+            if torch.cuda.is_available() and args.use_gpu:
+                image, label = image.cuda(), label.cuda()
+
+            output1 = model1(image)[0]
+            output1 = nn.functional.softmax(output1, dim=1)
+
+            output2 = model2(image)[0]
+            output2 = nn.functional.softmax(output2, dim=1)
+
+            output3 = model3(image)[0]
+            output3 = nn.functional.softmax(output3, dim=1)
+
+            a, b = 0.3333, 0.3333
+            output = a * output1 + b * output2 + (1.0 - a - b) * output3
+
+            output = (
+                output
+                .cpu()
+                .data[0]
+                .numpy()
+            )
+            output = output.transpose(1, 2, 0)
+
+            label, prob = np.argmax(output, axis=2), np.max(output, axis=2)
+            predicted_label.append(label.copy())
+            predicted_prob.append(prob.copy())
+            image_name.append(cityscapes_dataset.images[i])
+        thres = []
+
+    for i in range(args.num_classes):
+        x = predicted_prob[predicted_label == i]
+        if len(x) == 0:
+            thres.append(0)
+            continue
+        x = np.sort(x)
+        thres.append(x[int(np.round(len(x) * 0.66))])
+    thres = np.array(thres)
+    thres[thres > 0.9] = 0.9
+
+    for index in tqdm(range(len(image_name)), desc="Saving Pseudo Labels", unit="img"):
+        name = image_name[index]
+        label = predicted_label[index]
+        prob = predicted_prob[index]
+        for i in range(args.num_classes):
+            label[(prob < thres[i]) * (label == i)] = 255
+        
+        output = np.asarray(label, dtype=np.uint8)
+        output = Image.fromarray(output)
+        output_full = output.resize((2048, 1024), resample=Resampling.NEAREST)
+        folder = os.path.basename(os.path.dirname(name))
+        os.makedirs(os.path.join(PSEUDO_LABELS_PATH, folder), exist_ok=True)
+        name = os.path.basename(name)
+        name = name.replace("_leftImg8bit", "_pseudo_labelTrainIds")
+        name = os.path.join(PSEUDO_LABELS_PATH, folder, name)
+        colored = Image.fromarray(Cityscapes.decode(label).astype("uint8"))
+        colored_full = colored.resize((2048, 1024), resample=Resampling.NEAREST)
+        name_color = name.replace("_pseudo_labelTrainIds", "_pseudo_color")
+        output_full.save(name)
+        colored_full.save(name_color)
+
+
+if __name__ == "__main__":
+    args = TrainOptions.default()
+    models = ["SGD-6-01", "SGD-6-02", "SGD-6-006"]
+
+    postfix = "best.tar" if args.use_best else "latest.tar"
+    models = [os.path.join(args.save_model_path, "FDA", it, postfix) for it in models]
+    pprint(models)
+    if any([not os.path.isfile(it) for it in models]):
+        print("Some models are not found")
+        exit(1)
+    createCityscapesPseudoLabels(args, models, split="train")

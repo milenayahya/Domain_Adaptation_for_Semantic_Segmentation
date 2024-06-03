@@ -23,6 +23,7 @@ from Datasets.cityscapes_torch import Cityscapes
 from Datasets.gta5 import GTA5
 from .options.train_fda_options import parse_args, TrainFDAOptions, TrainOptions
 from model.fda_utils import FDAEntropyLoss, FDA_source_to_target
+import torchvision
 
 from utils import (
     fast_compute_global_accuracy,
@@ -218,14 +219,14 @@ def train(
         random_step_to_visualize = random.randrange(0, steps_to_do) + step
         for it_train, it_target in zip(dataloader_train, dataloader_target):
             data, label = it_train
-
-            data_target, label_target = it_target  # Used for entropy loss
-
             data: "torch.Tensor" = data.cuda()
             label: "torch.Tensor" = label.long().cuda()
+            
+            data_target, label_target = it_target  # Used for entropy loss
+            data_target: "torch.Tensor" = data_target.cuda()
+            label_target: "torch.Tensor" = label_target.long().cuda()
 
             optimizer.zero_grad()
-
 
             # 1. source to target, target to target
             src_in_trg = FDA_source_to_target(data, data_target, L=args.fda_beta)
@@ -233,25 +234,26 @@ def train(
 
             if step == random_step_to_visualize:
                 # Extract single image from batch of both data_copy and data
-                data_copy_vis: "torch.Tensor" = data.clone()[0, :, :, :]
-                data_vis: "torch.Tensor" = src_in_trg.clone()[0, :, :, :]
-                data_copy_vis = data_copy_vis.cpu()
-                data_vis = data_vis.cpu()
+                data_copy_pre_vis: "torch.Tensor" = data.clone()[0, :, :, :]
+                data_copy_pre_vis = data_copy_pre_vis.cpu()
+                data_copy_post_vis: "torch.Tensor" = src_in_trg.clone()[0, :, :, :]
+                data_copy_post_vis = data_copy_post_vis.cpu()
                 # Now log it via writer
                 writer.add_image(
                     f"{tensorboard_base_name}/fda_visualization_pre",
-                    np.array(data_copy_vis),
+                    data_copy_pre_vis,
                     global_step=epoch,
                     dataformats="CHW",
                 )
                 writer.add_image(
                     f"{tensorboard_base_name}/fda_visualization_post",
-                    np.array(data_vis),
+                    data_copy_post_vis,
                     global_step=epoch,
                     dataformats="CHW",
                 )
                 writer.flush()
                 logger.debug("Visualizing FDA source to target")
+
 
             # 2. normalize after Fourier transform
             data, label = OurNormalization()(src_in_trg, label)
@@ -264,11 +266,11 @@ def train(
                 loss = loss1 + loss2 + loss3
 
                 # CALCULATE ENTROPY LOSS HERE
+                # 2. Normalize after Fourier transform
+                data_target, label_target = OurNormalization()(trg_in_trg, label_target)
+                target_output, _, _ = model(data_target)
+                target_loss = FDAEntropyLoss(target_output, args.eta)
                 if epoch > args.switch_to_entropy_after_epoch:
-                    # 2. Normalize after Fourier transform
-                    data_target, label_target = OurNormalization()(trg_in_trg, label_target)
-                    target_output, _, _ = model(data_target)
-                    target_loss = FDAEntropyLoss(target_output, args.eta)
                     loss = loss + args.ent_loss_scaling * target_loss
                     writer.add_scalar(
                         f"{tensorboard_base_name}/ent_loss_step",
@@ -276,6 +278,15 @@ def train(
                         step,
                         display_name="Entropy Loss per Step",
                     )
+                if args.use_sst:
+                    sst_loss = ce_loss_func(target_output, label_target.squeeze(1))
+                    writer.add_scalar(
+                        f"{tensorboard_base_name}/sst_loss_step",
+                        sst_loss,
+                        step,
+                        display_name="Entropy Loss per Step",
+                    )
+                    loss = loss + sst_loss
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -385,6 +396,7 @@ def main(
 
     target_dataset = Cityscapes(
         mode="train",
+        labels="pseudo",
         transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
         max_iter=len(train_dataset)
     )
@@ -409,7 +421,7 @@ def main(
     # Validation dataset
     val_dataset = Cityscapes(
         mode="val",
-        transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
+        transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor(), OurNormalization()]),
     )
 
     dataloader_val = DataLoader(
@@ -522,20 +534,30 @@ def run(args: Optional[TrainFDAOptions] = None, writer: Optional["SummaryWriter"
     )
 
 if __name__ == "__main__":
-    logger.info("tg:Running FDA/SGD-6")
 
-    name = "FDA/SGD-6-006"
-    try:
-        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.006}) # will give me a b=1
-        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-        logger.info(f"tg:{name} Results: {pformat(res)}")
-    except Exception as exc:
-        logger.exception(f"tg:{name}", exc_info=exc)
+    # name = "FDA/SGD-6-006"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.006}) # will give me a b=3
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
+
+    # name = "FDA/SGD-6-01"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01}) # will give me a b=5
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
     
-    name = "FDA/SGD-6-01"
-    try:
-        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01}) # will give me a b=2
-        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-        logger.info(f"tg:{name} Results: {pformat(res)}")
-    except Exception as exc:
-        logger.exception(f"tg:{name}", exc_info=exc)
+    # name = "FDA/SGD-6-02"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.02}) # will give me a b=10
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
