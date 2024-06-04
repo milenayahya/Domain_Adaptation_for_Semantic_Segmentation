@@ -350,6 +350,7 @@ def save_checkpoint(state: dict, base_path: Union[str, Path], is_best: bool):
     logger.info("Saved checkpoint")
 
 
+# use models trained with FDA to generate pseudo-labels for a target dataset
 def createCityscapesPseudoLabels(
     args: "TrainOptions",
     models_paths: list[str],
@@ -370,8 +371,10 @@ def createCityscapesPseudoLabels(
 
     assert len(models_paths) == 3, "Must specify exactly 3 models"
 
+    # convert list of string models passed as parameter to list of cuda models
     models = []
     for model_path in models_paths:
+        # loading the models trained with different betas
         checkpoint = torch.load(model_path)
         model = BiSeNet(
             backbone=args.backbone,
@@ -387,17 +390,27 @@ def createCityscapesPseudoLabels(
         name, epoch = checkpoint["name"], checkpoint["epoch"]
         print(f"Loaded model from {model_path}, {name=} at epoch {epoch}")
 
+    # the loaded models:
     model1, model2, model3 = models[0], models[1], models[2]
 
     cityscapes_dataset = Cityscapes(
         mode=split, transforms=OurCompose([OurToTensor(), OurNormalization()])
     )
+    # Create a folder to save the pseudo-labels
     PSEUDO_LABELS_PATH = os.path.join(CITYSCAPES_BASE_PATH, "pseudo", split)
     os.makedirs(PSEUDO_LABELS_PATH, exist_ok=True)
+
     dataloader = DataLoader(cityscapes_dataset, 1, shuffle=False)
+    
+    # initialize arrays to save the pseudo-labels
     predicted_label = []
     predicted_prob = []
     image_name = []
+
+
+    # MBT adaptation
+    # iterate over the target dataset
+
     with torch.no_grad():
         for i, data in tqdm(
             enumerate(dataloader),
@@ -405,10 +418,12 @@ def createCityscapesPseudoLabels(
             unit="img",
             total=len(cityscapes_dataset),
         ):
+            # load image and label to GPU
             image, label = data
             if torch.cuda.is_available() and args.use_gpu:
                 image, label = image.cuda(), label.cuda()
 
+            # forward pass using all 3 models
             output1 = model1(image)[0]
             output1 = nn.functional.softmax(output1, dim=1)
 
@@ -418,6 +433,7 @@ def createCityscapesPseudoLabels(
             output3 = model3(image)[0]
             output3 = nn.functional.softmax(output3, dim=1)
 
+            # compute mean prediction
             a, b = 0.3333, 0.3333
             output = a * output1 + b * output2 + (1.0 - a - b) * output3
 
@@ -429,18 +445,24 @@ def createCityscapesPseudoLabels(
             )
             output = output.transpose(1, 2, 0)
 
+            # find the predicted label and predicted probability (the output is a softmax, so a probability)
             label, prob = np.argmax(output, axis=2), np.max(output, axis=2)
             predicted_label.append(label.copy())
             predicted_prob.append(prob.copy())
+
+            # get the image name
             image_name.append(cityscapes_dataset.images[i])
         thres = []
 
+    # compute the threshold for EACH class
     for i in range(args.num_classes):
+        # predictions of class i
         x = predicted_prob[predicted_label == i]
         if len(x) == 0:
             thres.append(0)
             continue
         x = np.sort(x)
+        # calculate threshold
         thres.append(x[int(np.round(len(x) * 0.66))])
     thres = np.array(thres)
     thres[thres > 0.9] = 0.9
@@ -449,10 +471,15 @@ def createCityscapesPseudoLabels(
         name = image_name[index]
         label = predicted_label[index]
         prob = predicted_prob[index]
+
+        # discard predictions for classes that have probability < threshold_class (filter out the low-confidence predictions)
         for i in range(args.num_classes):
             label[(prob < thres[i]) * (label == i)] = 255
         
+        # save the pseudo-label
         output = np.asarray(label, dtype=np.uint8)
+
+        # transform array to Image, name image, and save in correct folder
         output = Image.fromarray(output)
         output_full = output.resize((2048, 1024), resample=Resampling.NEAREST)
         folder = os.path.basename(os.path.dirname(name))
@@ -460,6 +487,8 @@ def createCityscapesPseudoLabels(
         name = os.path.basename(name)
         name = name.replace("_leftImg8bit", "_pseudo_labelTrainIds")
         name = os.path.join(PSEUDO_LABELS_PATH, folder, name)
+
+        # save colored pseudo-label
         colored = Image.fromarray(Cityscapes.decode(label).astype("uint8"))
         colored_full = colored.resize((2048, 1024), resample=Resampling.NEAREST)
         name_color = name.replace("_pseudo_labelTrainIds", "_pseudo_color")

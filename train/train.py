@@ -174,6 +174,8 @@ def train(
     max_miou = 0
     step = 0
     start_epoch = 1
+
+    # continue training from last checkpoint
     checkpoint_filename = os.path.join(args.save_model_path, "latest.tar")
     runs_execution_time = []
     if args.resume and os.path.exists(checkpoint_filename):

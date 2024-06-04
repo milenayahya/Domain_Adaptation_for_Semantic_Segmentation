@@ -20,8 +20,6 @@ def low_freq_mutate_A(amp_src, amp_trg, L=0.1):
         print(f"A - {b=}, {h=}, {w=}, {L=}")
     if b == 0:
         raise ValueError("L is too small")
-    # When rFFT is used only half of the space needs to be updated
-    # because of the symmetry along the last dimension
     amp_src[:, :, 0:b, 0:b] = amp_trg[:, :, 0:b, 0:b]
     return amp_src
 

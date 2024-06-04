@@ -176,12 +176,15 @@ def train(
 
     scaler = amp.GradScaler()
 
+    # cross-entropy loss
     ce_loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
 
     precision, miou = 0, 0
     max_miou = 0
     step = 0
     start_epoch = 1
+
+    # continue training from last checkpoint
     checkpoint_filename = os.path.join(args.save_model_path, "latest.tar")
     runs_execution_time = []
     if args.resume and os.path.exists(checkpoint_filename):
@@ -215,20 +218,25 @@ def train(
         writer.add_scalar(f"{tensorboard_base_name}/learning_rate", lr, epoch)
         tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
+
         steps_to_do = min(len(dataloader_train), len(dataloader_target))
         random_step_to_visualize = random.randrange(0, steps_to_do) + step
+        
+        # we need to iterate over both source and target data 
         for it_train, it_target in zip(dataloader_train, dataloader_target):
             data, label = it_train
             data: "torch.Tensor" = data.cuda()
             label: "torch.Tensor" = label.long().cuda()
             
-            data_target, label_target = it_target  # Used for entropy loss
+            # target data is used for entropy loss
+            data_target, label_target = it_target  
             data_target: "torch.Tensor" = data_target.cuda()
+            # this label is the pseudo-label
             label_target: "torch.Tensor" = label_target.long().cuda()
 
             optimizer.zero_grad()
 
-            # 1. source to target, target to target
+            # 1. source to target, target to target: apply FDA on source images
             src_in_trg = FDA_source_to_target(data, data_target, L=args.fda_beta)
             trg_in_trg = data_target
 
@@ -255,7 +263,7 @@ def train(
                 logger.debug("Visualizing FDA source to target")
 
 
-            # 2. normalize after Fourier transform
+            # 2. normalize after Fourier transform: subtract mean and std
             data, label = OurNormalization()(src_in_trg, label)
 
             with amp.autocast():
@@ -263,14 +271,20 @@ def train(
                 loss1 = ce_loss_func(output, label.squeeze(1))
                 loss2 = ce_loss_func(out16, label.squeeze(1))
                 loss3 = ce_loss_func(out32, label.squeeze(1))
+                # cross-entropy loss on source data and corresponding ground truth
                 loss = loss1 + loss2 + loss3
 
                 # CALCULATE ENTROPY LOSS HERE
                 # 2. Normalize after Fourier transform
                 data_target, label_target = OurNormalization()(trg_in_trg, label_target)
-                target_output, _, _ = model(data_target)
+                target_output, _, _ = model(data_target) # predicted labels for target dataset
+
+                '''entropy-loss penalizing high entropy regions,i.e, penalizing the decision boundary 
+                traversing regions densely populated by data points in the predicted output for target dataset'''
                 target_loss = FDAEntropyLoss(target_output, args.eta)
+
                 if epoch > args.switch_to_entropy_after_epoch:
+                    # loss = cross-entropy loss + entropy loss weighted by function
                     loss = loss + args.ent_loss_scaling * target_loss
                     writer.add_scalar(
                         f"{tensorboard_base_name}/ent_loss_step",
@@ -278,7 +292,10 @@ def train(
                         step,
                         display_name="Entropy Loss per Step",
                     )
+
+                # self-supervised training: in this step we make use of the pseudo-labels
                 if args.use_sst:
+                    # we add a loss: cross-entropy loss between the target predictions and target pseudo-labels
                     sst_loss = ce_loss_func(target_output, label_target.squeeze(1))
                     writer.add_scalar(
                         f"{tensorboard_base_name}/sst_loss_step",
@@ -286,8 +303,9 @@ def train(
                         step,
                         display_name="Entropy Loss per Step",
                     )
-                    loss = loss + sst_loss
+                    loss = loss + sst_loss # final loss composed of 3 losses
 
+            # backward propagation
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -339,6 +357,7 @@ def train(
                 False,
             )
 
+        # perform validation every "validation_step" epochs
         if epoch % args.validation_step == 0:
             precision, miou = val(
                 args,
@@ -350,6 +369,7 @@ def train(
                 visualize_images=True,
                 dataset_name=validation_dataset_name,
             )
+            # update best epoch
             if miou > max_miou:
                 max_miou = miou
                 best_epoch = epoch
@@ -383,6 +403,7 @@ def main(
     # dataset
     n_classes = args.num_classes
 
+    # source dataset
     train_dataset = GTA5(
         "train",
         transforms=OurCompose(
@@ -394,6 +415,7 @@ def main(
         ),
     )
 
+    # target dataset, pseudo mode for SST
     target_dataset = Cityscapes(
         mode="train",
         labels="pseudo",
@@ -499,6 +521,7 @@ def main(
         f"Loaded {args.use_best and "best" or "latest"} checkpoint that was at epoch n. {start_epoch-1}"
     )
 
+    # Evaluation on Best
     precision, max_miou = val(
         args,
         model,
@@ -534,6 +557,20 @@ def run(args: Optional[TrainFDAOptions] = None, writer: Optional["SummaryWriter"
     )
 
 if __name__ == "__main__":
+
+    ''' When use_sst is False, this script simply performs FDA on source images to make them "look like" the target images, and trains the model
+    using two losses: cross-entropy loss between source labels and source predictions, and entropy loss on the target predictions.'''
+
+    ''' We run this script with use_sst set to False 3 times with 3 different betas, and we obtain 3 different models trained with FDA'''
+
+    ''' Having 3 FDA models with different betas, we can now create pseudo-labels for the target dataset.'''
+
+    ''' We run utils.py where in the main() function "createCityscapesPseudoLabels" is called and the pseduo-labels
+    are created and saved in a folder. '''
+
+    ''' We run this script one more time with `use_sst set` to True and with `labeles`=pseudo for the target dataset, this model performs 
+    FDA on the source images but adds a third loss: The cross-entropy loss between the pseudo labels and the target predictions. 
+    This is called SST where the pseudo labels are treated as ground truth. '''
 
     # name = "FDA/SGD-6-006"
     # try:
