@@ -7,6 +7,7 @@ except ImportError:
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from pprint import pformat
 from typing import Any, Literal, Optional
 
 from Datasets.transformations import *
@@ -20,13 +21,13 @@ from tqdm import tqdm
 import os
 from Datasets.cityscapes_torch import Cityscapes
 from Datasets.gta5 import GTA5
-from model.discriminator import FCDiscriminator
-from .options.train_ada_options import parse_args, TrainADAOptions, TrainOptions
+from .options.train_fda_options import parse_args, TrainFDAOptions, TrainOptions
+from model.fda_utils import FDAEntropyLoss, FDA_source_to_target
+import torchvision
 
 from utils import (
     fast_compute_global_accuracy,
     reverse_one_hot,
-    compute_global_accuracy,
     fast_hist,
     per_class_iu,
     save_checkpoint,
@@ -53,6 +54,10 @@ logger.setLevel(logging.DEBUG)
 
 DatasetName = Literal["Cityscapes", "GTA5"]
 
+# MAYBE SHOULD USE IMAGENET MEAN??? INVESTIGATE THIS
+IMG_MEAN = np.array(IMAGENET_MEAN, dtype=np.float32)
+IMG_MEAN = torch.reshape(torch.from_numpy(IMG_MEAN), (1, 3, 1, 1))
+
 
 def val(
     args: "TrainOptions",
@@ -62,7 +67,7 @@ def val(
     writer: Optional["SummaryWriter"] = None,
     name: Optional[str] = None,
     epoch: Optional[int] = None,
-    dataset_name: Optional[DatasetName] = None,
+    dataset_name: Optional[DatasetName] = "Cityscapes",
 ) -> tuple:
 
     visualize_img_idx = 0  # random.randrange(0, len(dataloader))
@@ -81,7 +86,7 @@ def val(
             # get RGB predict image
             predict, _, _ = model(data)
 
-            # visualzizing an image and logging
+            # visualizing images and writing logs
             if (
                 writer is not None
                 and name is not None
@@ -103,18 +108,20 @@ def val(
                     global_step=epoch,
                     dataformats="HWC",
                 )
-                writer.add_image(
-                    f"{name}/ground_truth",
-                    np.array(vl),
-                    global_step=epoch,
-                    dataformats="HWC",
-                )
-                writer.add_image(
-                    f"{name}/source",
-                    np.array(data[0].cpu()),
-                    global_step=epoch,
-                    dataformats="CHW",
-                )
+                # Do it once, since this doesn't change
+                if epoch <= 5 or epoch > 52:
+                    writer.add_image(
+                        f"{name}/ground_truth",
+                        np.array(vl),
+                        global_step=epoch,
+                        dataformats="HWC",
+                    )
+                    writer.add_image(
+                        f"{name}/source",
+                        np.array(data[0].cpu()),
+                        global_step=epoch,
+                        dataformats="CHW",
+                    )
                 writer.flush()
 
             predict = predict.squeeze(0)
@@ -153,25 +160,11 @@ def val(
         return precision, miou
 
 
-"""
-Assigning source_label = 0 and target_label = 1: The idea is to train the discriminator to classify predictions 
-as either coming from the source domain (assigned label 0) or the target domain (assigned label 1). 
-
-During training, the aim is to minimize the ability of the discriminator to distinguish between the domains.
-This is achieved by minimizing the binary cross-entropy loss between the discriminator's predictions 
-and the assigned labels (source_label or target_label). 
-As the training progresses, the discriminator becomes less effective at distinguishing between the domains, 
-indicating that the features learned by the model become domain-invariant, which is our goal.
-"""
-
-
 def train(
-    args: "TrainADAOptions",
+    args: "TrainFDAOptions",
     model: "torch.nn.Module",
-    modelD: "torch.nn.Module",
     optimizer: "torch.optim.Optimizer",
-    optimizerD: "torch.optim.Optimizer",
-    dataloader_source: "DataLoader",
+    dataloader_train: "DataLoader",
     dataloader_target: "DataLoader",
     dataloader_val: "DataLoader",
     validation_dataset_name: "DatasetName",
@@ -179,37 +172,23 @@ def train(
     writer: Optional["SummaryWriter"] = None,
 ):
     if writer is None:
-        writer = SummaryWriter(comment=f"")
+        writer = SummaryWriter(comment=f"FDA")
 
     scaler = amp.GradScaler()
 
-    loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
-
-    # bce_loss is minimized to minimize the ability of the discrimnator to distiguish between domains
-    bce_loss = torch.nn.BCEWithLogitsLoss()
+    ce_loss_func = torch.nn.CrossEntropyLoss(ignore_index=255)
 
     precision, miou = 0, 0
     max_miou = 0
     step = 0
-
-    # the labels which the discriminator will assign
-    source_label = 0
-    target_label = 1
-
     start_epoch = 1
     checkpoint_filename = os.path.join(args.save_model_path, "latest.tar")
     runs_execution_time = []
     if args.resume and os.path.exists(checkpoint_filename):
-        checkpoint: dict = torch.load(checkpoint_filename)
+        checkpoint = torch.load(checkpoint_filename)
         start_epoch = checkpoint["epoch"]
         model.load_state_dict(checkpoint["state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer"])
-        model_d_state_dict = checkpoint.get("state_dict_d", None)
-        if model_d_state_dict is not None:
-            modelD.load_state_dict(model_d_state_dict)
-        optimizer_d_state_dict = checkpoint.get("optimizer_d", None)
-        if optimizer_d_state_dict is not None:
-            optimizerD.load_state_dict(optimizer_d_state_dict)
         max_miou = checkpoint["max_miou"]
         precision = checkpoint.get("precision", 0)
         logger.info(
@@ -231,105 +210,91 @@ def train(
         lr = poly_lr_scheduler(
             optimizer, args.learning_rate, iter=(epoch - 1), max_iter=args.num_epochs
         )  # epoch-1 because we are now starting from 1
-        lr_discriminator = poly_lr_scheduler(
-            optimizerD, args.learning_rate_D, iter=(epoch - 1), max_iter=args.num_epochs
-        )
-
         model.train()
-        modelD.train()
-
-        tq = tqdm(total=len(dataloader_target) * args.batch_size, unit="img")
+        tq = tqdm(total=len(dataloader_train) * args.batch_size, unit="img")
         writer.add_scalar(f"{tensorboard_base_name}/learning_rate", lr, epoch)
-        writer.add_scalar(
-            f"{tensorboard_base_name}/learning_rate_discriminator",
-            lr_discriminator,
-            epoch,
-        )
-        tq.set_description(f"{epoch=}, {lr=}, {lr_discriminator}")
-
+        tq.set_description("epoch %d, lr %f" % (epoch, lr))
         loss_record = []
-        loss_source_record = []
-        loss_target_record = []
-        data: "torch.Tensor"
-        data_target: "torch.Tensor"
-        label: "torch.Tensor"
-        for ((data, label), (data_target, _)) in zip(
-            dataloader_source, dataloader_target
-        ):
-
-            data = data.cuda()
-            label = label.long().cuda()
-            data_target = data_target.cuda()
+        steps_to_do = min(len(dataloader_train), len(dataloader_target))
+        random_step_to_visualize = random.randrange(0, steps_to_do) + step
+        for it_train, it_target in zip(dataloader_train, dataloader_target):
+            data, label = it_train
+            data: "torch.Tensor" = data.cuda()
+            label: "torch.Tensor" = label.long().cuda()
+            
+            data_target, label_target = it_target  # Used for entropy loss
+            data_target: "torch.Tensor" = data_target.cuda()
+            label_target: "torch.Tensor" = label_target.long().cuda()
 
             optimizer.zero_grad()
-            optimizerD.zero_grad()
 
-            # Train generator with source data:
-            # Discriminator model is frozen, params are not updated during back-propagation, no gradients computed
-            for param in modelD.parameters():
-                param.requires_grad = False
+            # 1. source to target, target to target
+            src_in_trg = FDA_source_to_target(data, data_target, L=args.fda_beta)
+            trg_in_trg = data_target
+
+            if step == random_step_to_visualize:
+                # Extract single image from batch of both data_copy and data
+                data_copy_pre_vis: "torch.Tensor" = data.clone()[0, :, :, :]
+                data_copy_pre_vis = data_copy_pre_vis.cpu()
+                data_copy_post_vis: "torch.Tensor" = src_in_trg.clone()[0, :, :, :]
+                data_copy_post_vis = data_copy_post_vis.cpu()
+                # Now log it via writer
+                writer.add_image(
+                    f"{tensorboard_base_name}/fda_visualization_pre",
+                    data_copy_pre_vis,
+                    global_step=epoch,
+                    dataformats="CHW",
+                )
+                writer.add_image(
+                    f"{tensorboard_base_name}/fda_visualization_post",
+                    data_copy_post_vis,
+                    global_step=epoch,
+                    dataformats="CHW",
+                )
+                writer.flush()
+                logger.debug("Visualizing FDA source to target")
+
+
+            # 2. normalize after Fourier transform
+            data, label = OurNormalization()(src_in_trg, label)
 
             with amp.autocast():
                 output, out16, out32 = model(data)
-                loss1 = loss_func(output, label.squeeze(1))
-                loss2 = loss_func(out16, label.squeeze(1))
-                loss3 = loss_func(out32, label.squeeze(1))
+                loss1 = ce_loss_func(output, label.squeeze(1))
+                # loss1 = scaler.scale(loss1)
+                loss2 = ce_loss_func(out16, label.squeeze(1))
+                # loss2 = scaler.scale(loss2)
+                loss3 = ce_loss_func(out32, label.squeeze(1))
+                # loss3 = scaler.scale(loss3)
+                optimizer.zero_grad()
+                # loss1 = loss1.backward(retain_graph=True)
+                # loss2 = loss2.backward(retain_graph=True)
+                # loss3 = loss3.backward(retain_graph=True)
                 loss = loss1 + loss2 + loss3
+                # CALCULATE ENTROPY LOSS HERE
+                # 2. Normalize after Fourier transform
+                data_target, label_target = OurNormalization()(trg_in_trg, label_target)
+                target_output, _, _ = model(data_target)
+                target_loss = FDAEntropyLoss(target_output, args.eta)
+                if epoch > args.switch_to_entropy_after_epoch:
+                    loss = loss + args.ent_loss_scaling*target_loss
+                    writer.add_scalar(
+                        f"{tensorboard_base_name}/ent_loss_step",
+                        target_loss,
+                        step,
+                        display_name="Entropy Loss per Step",
+                    )
+                if args.use_sst:
+                    sst_loss = ce_loss_func(target_output, label_target.squeeze(1))
+                    writer.add_scalar(
+                        f"{tensorboard_base_name}/sst_loss_step",
+                        sst_loss,
+                        step,
+                        display_name="Entropy Loss per Step",
+                    )
+                    loss = loss + sst_loss
 
             scaler.scale(loss).backward()
-
-            with amp.autocast():
-                output_target, out16_target, out32_target = model(data_target)
-                D_out1 = modelD(torch.softmax(output_target, dim=1))  # peppe-sc
-                # D_out1 = modelD(F.softmax(output_target,dim=1)) #Alessio
-
-                loss_adv_target1 = bce_loss(
-                    D_out1,
-                    torch.FloatTensor(D_out1.data.size()).fill_(source_label).cuda(),
-                )
-                loss_adv_target = args.lambda_d1 * loss_adv_target1
-
-                ## in Alessio's repo loss is just loss1+loss2+loss3
-                loss = loss + loss_adv_target  # peppe-sc
-
-            scaler.scale(loss_adv_target).backward()
-
-            # Now we train the Discriminator
-            for param in modelD.parameters():
-                param.requires_grad = True
-
-            # detach tensors to prevent gradients from flowing back into the main model during the subsequent backward pass
-            output = output.detach()
-            out16 = out16.detach()
-            out32 = out32.detach()
-
-            # forward pass: apply softmax to the detached outputs and pass them through the Discriminator to obtain predictions
-            with amp.autocast():
-                D_out1 = modelD(torch.softmax(output, dim=1))
-                # loss calculation
-                loss_d_source1 = bce_loss(
-                    D_out1,
-                    torch.FloatTensor(D_out1.data.size()).fill_(source_label).cuda(),
-                )
-
-            # backward propagation
-            scaler.scale(loss_d_source1).backward()
-
-            # same for target domain:
-            output_target = output_target.detach()
-            out16_target = out16_target.detach()
-            out32_target = out32_target.detach()
-
-            with amp.autocast():
-                D_out1 = modelD(torch.softmax(output_target, dim=1))
-                loss_d_target1 = bce_loss(
-                    D_out1,
-                    torch.FloatTensor(D_out1.data.size()).fill_(target_label).cuda(),
-                )
-
-            scaler.scale(loss_d_target1).backward()
-
-            scaler.step(optimizerD)
             scaler.step(optimizer)
             scaler.update()
 
@@ -342,41 +307,18 @@ def train(
                 step,
                 display_name="Loss per Step",
             )
-
-            # this loss is the loss of the generator for the source and target
             loss_record.append(loss.item())
-            # discriminator loss for source
-            loss_source_record.append(loss_d_source1.item())
-            # discriminator loss for target
-            loss_target_record.append(loss_d_target1.item())
-
         tq.close()
         loss_train_mean = np.mean(loss_record)
-        loss_discr_source_mean = np.mean(loss_source_record)
-        loss_discr_target_mean = np.mean(loss_target_record)
-
         writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_train",
+            f"{tensorboard_base_name}/loss_epoch",
             float(loss_train_mean),
             epoch,
             display_name="Mean Loss per Epoch",
         )
-        writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_discr_source",
-            float(loss_discr_source_mean),
-            epoch,
-            display_name="Mean Loss per Epoch (Discrimator Source)",
-        )
-        writer.add_scalar(
-            f"{tensorboard_base_name}/loss_epoch_discr_target",
-            float(loss_discr_target_mean),
-            epoch,
-            display_name="Mean Loss per Epoch (Discrimator Target)",
-        )
-
         ts_duration: timedelta = datetime.today() - ts_start
         logger.info(
-            f"loss for train @ {epoch=}: {loss_train_mean=} | {loss_discr_source_mean=} | {loss_discr_target_mean=} after {ts_duration.seconds} seconds"
+            f"loss for train @ {epoch=}: {loss_train_mean} after {ts_duration.seconds} seconds"
         )
         runs_execution_time.append(ts_duration.seconds)
         writer.add_scalar(
@@ -386,7 +328,6 @@ def train(
             display_name="Training Duration",
             summary_description="seconds",
         )
-
         if epoch % args.checkpoint_step == 0:
             logger.info(
                 f"Saving latest checkpoint @ {epoch=}, with max_miou (of latest val) = {max_miou}"
@@ -395,11 +336,10 @@ def train(
                 {
                     "epoch": epoch + 1,
                     "state_dict": model.state_dict(),
-                    "state_dict_d": modelD.state_dict(),
                     "max_miou": max_miou,
                     "precision": precision,
                     "optimizer": optimizer.state_dict(),
-                    "optimizer_d": optimizerD.state_dict(),
+                    "name": training_name,
                 },
                 args.save_model_path,
                 False,
@@ -424,11 +364,10 @@ def train(
                     {
                         "epoch": epoch + 1,
                         "state_dict": model.state_dict(),
-                        "state_dict_d": modelD.state_dict(),
                         "max_miou": max_miou,
                         "precision": precision,
                         "optimizer": optimizer.state_dict(),
-                        "optimizer_d": optimizerD.state_dict(),
+                        "name": training_name,
                     },
                     args.save_model_path,
                     True,
@@ -439,13 +378,9 @@ def train(
 
 
 def main(
-    source_ds_name: DatasetName,
-    target_ds_name: DatasetName,
-    validation_ds_name: DatasetName,
     *,
-    augmentation: bool = False,
     save_model_postfix: str = "",
-    args: Optional["TrainADAOptions"] = None,
+    args: Optional[TrainFDAOptions] = None,
     writer: Optional["SummaryWriter"] = None,
 ) -> tuple[float, float]:
     if args is None:
@@ -454,58 +389,60 @@ def main(
     # dataset
     n_classes = args.num_classes
 
-    # Source dataset
-    if source_ds_name == "GTA5":
-        if augmentation:
-            transformations = OurCompose(
+    if args.augmentation:
+        train_dataset = GTA5(
+            "train",
+            transforms=OurCompose(
                 [
                     OurResize(GTA5_CROP_SIZE),
                     OurToTensor(),
                     OurRandomCrop(CITYSCAPES_CROP_SIZE),
                     OurGeometricAugmentationTransformations(),
                     OurColorJitterTransformation(),
-                    OurNormalization(),
                 ]
-            )
-        else:
-            transformations = OurCompose([OurResize(GTA5_CROP_SIZE), OurToTensor(), OurRandomCrop(CITYSCAPES_CROP_SIZE), OurNormalization()])
+            ),
+        )
+    else: 
+      train_dataset = GTA5(
+          "train",
+          transforms=OurCompose(
+              [
+                  OurResize(GTA5_CROP_SIZE),
+                  OurToTensor(),
+                  OurRandomCrop(CITYSCAPES_CROP_SIZE),
+              ]
+          ),
+      )
 
-        source_dataset = GTA5("train", transforms=transformations)
-    else:
-        raise ValueError("Dataset non valido")
+    target_dataset = Cityscapes(
+        mode="train",
+        labels="pseudo",
+        transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor()]),
+        max_iter=len(train_dataset)
+    )
 
-    dataloader_source = DataLoader(
-        source_dataset,
+    dataloader_train = DataLoader(
+        train_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=False,
         drop_last=True,
     )
-
-    # Target dataset
-    if target_ds_name == "Cityscapes":
-        target_dataset = Cityscapes(
-            mode="train",
-            transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor(), OurNormalization()]),
-        )
-    else:
-        raise ValueError("Dataset non valido")
-
     dataloader_target = DataLoader(
         target_dataset,
         batch_size=args.batch_size,
-        shuffle=False,
+        shuffle=True,
         num_workers=args.num_workers,
         pin_memory=False,
         drop_last=True,
     )
 
     # Validation dataset
-    if validation_ds_name == "Cityscapes":
-        val_dataset = Cityscapes(mode="val", transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor(), OurNormalization()]))
-    else:
-        raise ValueError("Dataset non valido")
+    val_dataset = Cityscapes(
+        mode="val",
+        transforms=OurCompose([OurResize(CITYSCAPES_CROP_SIZE), OurToTensor(), OurNormalization()]),
+    )
 
     dataloader_val = DataLoader(
         val_dataset,
@@ -515,7 +452,7 @@ def main(
         drop_last=False,
     )
 
-    # model (Generator)
+    # model
     model = BiSeNet(
         backbone=args.backbone,
         n_classes=n_classes,
@@ -523,16 +460,11 @@ def main(
         use_conv_last=args.use_conv_last,
     )
 
-    # Discriminator model
-    model_D = FCDiscriminator(num_classes=args.num_classes)
-    # create more instances to implement multi-level discriminator
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.debug("Device: " + str(device))
 
     if torch.cuda.is_available() and args.use_gpu:
         model = torch.nn.DataParallel(model).cuda()
-        model_D = torch.nn.DataParallel(model_D).cuda()
 
     # optimizer
     # build optimizer
@@ -545,12 +477,7 @@ def main(
     elif args.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     else:  # rmsprop
-        logger.critical("not supported optimizer")
-        return (-1, -1)
-
-    optimizer_D = torch.optim.Adam(
-        model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99)
-    )
+        raise Exception("not supported optimizer")
 
     if save_model_postfix != "":
         args.save_model_path = Path(
@@ -562,19 +489,19 @@ def main(
         train(
             args,
             model,
-            model_D,
             optimizer,
-            optimizer_D,
-            dataloader_source,
+            dataloader_train,
             dataloader_target,
             dataloader_val,
             training_name=save_model_postfix,
             writer=writer,
-            validation_dataset_name=validation_ds_name,
+            validation_dataset_name="Cityscapes",
         )
 
     # final test
-    checkpoint_filename = os.path.join(args.save_model_path, "best.tar" if args.use_best else "latest.tar")
+    checkpoint_filename = os.path.join(
+        args.save_model_path, "best.tar" if args.use_best else "latest.tar"
+    )
     logger.info(
         f"Performing final evaluation with the {args.use_best and "best" or "latest"} model saved in the following checkpoint: {checkpoint_filename}"
     )
@@ -584,12 +511,14 @@ def main(
         raise Exception(
             f"Trying to train on {args.use_best and "best" or "latest"} but it doesn't exitsts. Looking for {checkpoint_filename}"
         )
-    
+
     checkpoint = torch.load(checkpoint_filename)
     start_epoch = checkpoint["epoch"]
     model.load_state_dict(checkpoint["state_dict"])
-    logger.info(f"Loaded {args.use_best and "best" or "latest"} checkpoint that was at epoch n. {start_epoch}")
-    
+    logger.info(
+        f"Loaded {args.use_best and "best" or "latest"} checkpoint that was at epoch n. {start_epoch-1}"
+    )
+
     precision, max_miou = val(
         args,
         model,
@@ -598,7 +527,7 @@ def main(
         name=save_model_postfix.split("/")[0],
         visualize_images=True,
         epoch=args.num_epochs + 10,  # above anything, final validation
-        dataset_name=validation_ds_name,
+        dataset_name="Cityscapes",
     )
 
     # Save again best model, but with updated precision and max_miou
@@ -615,52 +544,103 @@ def main(
 
     return precision, max_miou
 
+def run(args: Optional[TrainFDAOptions] = None, writer: Optional["SummaryWriter"] = None):
+    if args is None:
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
+    return main(
+        args=args,
+        save_model_postfix="FDA/SGD-6",
+        writer=writer,
+    )
 
 if __name__ == "__main__":
 
-    logger.info("tg:Starting MEGA ADA")
+    name = "FDA/SGD-6-02-AUG"
     try:
-        logger.info("tg:Starting task 3: ADA, GTA5 -> Cityscapes")
-        writer = SummaryWriter(comment="task_3_SGD6_normal")
-        precision_3, miou_3 = main(
-            "GTA5",
-            "Cityscapes",
-            "Cityscapes",
-            save_model_postfix="3/SGD-6-normal",
-            writer=writer,
-            args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
-        )
-        logger.info(f"tg:3 Results: Precision={precision_3} Mean IoU={miou_3}")
-    except Exception as e:
-        logger.critical("tg:Error on 3GCC", exc_info=e)
-
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.02, "augmentation": True}) # will give me a b=10
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+    name = "FDA/SGD-6-05-B-AUG"
     try:
-        logger.info("tg:Starting task 3: ADA, GTA5+aug -> Cityscapes")
-        writer = SummaryWriter(comment="task_3_SGD6_aug")
-        precision_3_aug, miou_3_aug = main(
-            "GTA5",
-            "Cityscapes",
-            "Cityscapes",
-            augmentation=True,
-            save_model_postfix="3/SGD-6-aug",
-            writer=writer,
-            args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
-        )
-        logger.info(
-            f"tg:3_aug Results: Precision={precision_3_aug} Mean IoU={miou_3_aug}"
-        )
-    except Exception as e:
-        logger.critical("tg:Error on 3_aug", exc_info=e)
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.05, "augmentation": True})
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
 
+    name = "FDA/SGD-6-03-AUG"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.03, "augmentation": True})
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
 
-# Doubts:
+    name = "FDA/SGD-6-01-AUG"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01, "augmentation": True}) # will give me a b=5
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+    
 
-# use F.softmax or FN.softmax to compute output of models ?
-# -> Using torch.softmax
+    # name = "FDA/SGD-4-01"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.01}) # will give me a b=5
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
+    
+    # name = "FDA/SGD-4-02"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.02}) # will give me a b=10
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
+    
+    # name = "FDA/SST-6-006"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.006, "use_sst": True}) # will give me a b=3
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
 
-# Training Generator loss: do we add the discriminator loss (peppe-sc) or not (Alessio) ?
+    # name = "FDA/SST-4-006"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.006, "use_sst": True}) # will give me a b=3
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
 
-# should we implement the multilevel discriminator (D1, D2, D3) ? -> multiple instances of discriminator,
-# each uses outputs from a different level of the NN ?
+    # name = "FDA/SST-6-01"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01, "use_sst": True}) # will give me a b=3
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)
 
-# we could hypertune lambda, as for the moment we only use lambda_d1
+    # name = "FDA/SST-4-01"
+    # try:
+    #     logger.info(f"tg:Running {name}")
+    #     args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.01, "use_sst": True}) # will give me a b=3
+    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+    #     logger.info(f"tg:{name} Results: {pformat(res)}")
+    # except Exception as exc:
+    #     logger.exception(f"tg:{name}", exc_info=exc)

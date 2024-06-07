@@ -23,6 +23,9 @@ class TrainFDAOptions(TrainOptions):
     use_sst: bool = False
     """Whether to use SST loss or not"""
 
+    augmentation: bool = False
+    """Whether to use data augmentation or not"""
+
 
 def parse_args(*args, **kwargs) -> TrainFDAOptions:
     return TrainFDAOptions().parse_args(*args, **kwargs)
