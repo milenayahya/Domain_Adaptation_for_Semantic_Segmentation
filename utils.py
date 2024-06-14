@@ -1,3 +1,4 @@
+from genericpath import isdir
 import json
 from pathlib import Path
 from pprint import pprint
@@ -496,14 +497,74 @@ def createCityscapesPseudoLabels(
         colored_full.save(name_color)
 
 
-if __name__ == "__main__":
-    args = TrainOptions.default()
-    models = ["SGD-6-01", "SGD-6-02", "SGD-6-006"]
+def visualizer(args: "TrainOptions", model_path: str, save_path: str, image_index = 0, split: Literal['train', 'val'] = "train"):
+    from model.model_stages import BiSeNet
+    from Datasets.cityscapes_torch import Cityscapes
+    import torch
+    from torch.utils.data import DataLoader
+    from Datasets.transformations import (
+        OurCompose,
+        OurNormalization,
+        OurToTensor,
+    )
+    import numpy as np
 
-    postfix = "best.tar" if args.use_best else "latest.tar"
-    models = [os.path.join(args.save_model_path, "FDA", it, postfix) for it in models]
-    pprint(models)
-    if any([not os.path.isfile(it) for it in models]):
-        print("Some models are not found")
-        exit(1)
-    createCityscapesPseudoLabels(args, models, split="train")
+    checkpoint = torch.load(model_path)
+    model = BiSeNet(
+        backbone=args.backbone,
+        n_classes=args.num_classes,
+        pretrain_model=str(args.pretrain_path),
+        use_conv_last=args.use_conv_last,
+    )
+    if torch.cuda.is_available() and args.use_gpu:
+        model = torch.nn.DataParallel(model).cuda()
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+
+    os.makedirs(save_path, exist_ok=True)
+
+    pseudo_dataset = Cityscapes(
+        mode=split, transforms=OurCompose([OurToTensor(), OurNormalization()])
+    )
+
+    dataloader = DataLoader(pseudo_dataset, 1, shuffle=False)
+    output: torch.Tensor
+    for i, data in enumerate(dataloader):
+        if i != image_index:
+            continue
+        img, _ = data
+        output = model(img)[0]
+        break
+    out_np: npt.NDArray = (
+        output
+        .cpu()
+        .data[0]
+        .numpy()
+    )
+    out_np = out_np.transpose(1, 2, 0)
+    out_np = np.argmax(out_np, axis=2)
+    colored = Image.fromarray(Cityscapes.decode(out_np).astype("uint8"))
+    # print("Saving Pred")
+    colored.save(os.path.join(save_path, "pred.png"))
+
+
+if __name__ == "__main__":
+    from tqdm import tqdm
+    args = TrainOptions.default()
+    models = ["2B/SGD-4", "2C2/SGD-6", "3/SGD-6-aug-B", "3/SGD-4-normal-B", "FDA/SGD-6-01-AUG", "FDA/SGD-6-01-SST-AUG-FINAL"]
+
+    # postfix = "best.tar" if args.use_best else "latest.tar"
+    # models = [os.path.join(args.save_model_path, "FDA", it, postfix) for it in models]
+    # print(f"{models=}")
+    # if any([not os.path.isfile(it) for it in models]):
+    #     print("Some models are not found")
+    #     exit(1)
+    # createCityscapesPseudoLabels(args, models, split="train")
+    for model in models:
+        model_path = os.path.abspath(os.path.join(args.save_model_path, model))
+        if not os.path.exists(model_path):
+            raise Exception("Bad Model name", model_path)
+        
+    for model in tqdm(models, unit="model"):
+        model_path = os.path.abspath(os.path.join(args.save_model_path, model))
+        visualizer(args, os.path.join(model_path, "best.tar"), os.path.join(args.save_model_path, "..", 'logs', "visual", model), 0, "val")

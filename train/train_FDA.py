@@ -417,16 +417,30 @@ def main(
     n_classes = args.num_classes
 
     # source dataset
-    train_dataset = GTA5(
-        "train",
-        transforms=OurCompose(
-            [
-                OurResize(GTA5_CROP_SIZE),
-                OurToTensor(),
-                OurRandomCrop(CITYSCAPES_CROP_SIZE),
-            ]
-        ),
-    )
+    if args.augmentation:
+        train_dataset = GTA5(
+            "train",
+            transforms=OurCompose(
+                [
+                    OurResize(GTA5_CROP_SIZE),
+                    OurToTensor(),
+                    OurRandomCrop(CITYSCAPES_CROP_SIZE),
+                    OurGeometricAugmentationTransformations(),
+                    OurColorJitterTransformation(),
+                ]
+            ),
+        )
+    else: 
+      train_dataset = GTA5(
+          "train",
+          transforms=OurCompose(
+              [
+                  OurResize(GTA5_CROP_SIZE),
+                  OurToTensor(),
+                  OurRandomCrop(CITYSCAPES_CROP_SIZE),
+              ]
+          ),
+      )
 
     # target dataset, pseudo mode for SST
     target_dataset = Cityscapes(
@@ -560,14 +574,6 @@ def main(
 
     return precision, max_miou
 
-def run(args: Optional[TrainFDAOptions] = None, writer: Optional["SummaryWriter"] = None):
-    if args is None:
-        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
-    return main(
-        args=args,
-        save_model_postfix="FDA/SGD-6",
-        writer=writer,
-    )
 
 if __name__ == "__main__":
 
@@ -584,60 +590,101 @@ if __name__ == "__main__":
     ''' We run this script one more time with `use_sst set` to True and with `labeles`=pseudo for the target dataset, this model performs 
     FDA on the source images but adds a third loss: The cross-entropy loss between the pseudo labels and the target predictions. 
     This is called SST where the pseudo labels are treated as ground truth. '''
+    postfix = "FINAL"
 
-    # name = "FDA/SGD-6-02-B"
-    # try:
-    #     logger.info(f"tg:Running {name}")
-    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.02}) # will give me a b=10
-    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-    #     logger.info(f"tg:{name} Results: {pformat(res)}")
-    # except Exception as exc:
-    #     logger.exception(f"tg:{name}", exc_info=exc)
-    # name = "FDA/SGD-6-05-B"
-    # try:
-    #     logger.info(f"tg:Running {name}")
-    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.05})
-    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-    #     logger.info(f"tg:{name} Results: {pformat(res)}")
-    # except Exception as exc:
-    #     logger.exception(f"tg:{name}", exc_info=exc)
-
-    # name = "FDA/SGD-6-03-B"
-    # try:
-    #     logger.info(f"tg:Running {name}")
-    #     args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.03})
-    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-    #     logger.info(f"tg:{name} Results: {pformat(res)}")
-    # except Exception as exc:
-    #     logger.exception(f"tg:{name}", exc_info=exc)
-
-    name = "FDA/SGD-6-01-B"
+    name = f"FDA/SGD-4-01-AUG-{postfix}"
+    all_res = dict()
     try:
         logger.info(f"tg:Running {name}")
-        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01}) # will give me a b=5
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.01, "augmentation": True}) # will give me a b=5
         res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+    
+    name = f"FDA/SGD-4-03-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.03, "augmentation": True}) # will give me a b=10
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = f"FDA/SGD-4-05-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.05, "augmentation": True})
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
         logger.info(f"tg:{name} Results: {pformat(res)}")
     except Exception as exc:
         logger.exception(f"tg:{name}", exc_info=exc)
     
 
-    # name = "FDA/SGD-4-01"
-    # try:
-    #     logger.info(f"tg:Running {name}")
-    #     args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.01}) # will give me a b=5
-    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-    #     logger.info(f"tg:{name} Results: {pformat(res)}")
-    # except Exception as exc:
-    #     logger.exception(f"tg:{name}", exc_info=exc)
+    name = f"FDA/SGD-4-01-SST-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.01, "augmentation": True, "use_sst": True}) # will give me a b=10
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = f"FDA/SGD-4-03-SST-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.03, "augmentation": True, "use_sst": True}) # will give me a b=10
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = f"FDA/SGD-4-05-SST-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.05, "augmentation": True, "use_sst": True})
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
     
-    # name = "FDA/SGD-4-02"
-    # try:
-    #     logger.info(f"tg:Running {name}")
-    #     args = TrainFDAOptions().from_dict({"batch_size": 4, "optimizer": "sgd", "fda_beta": 0.02}) # will give me a b=10
-    #     res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
-    #     logger.info(f"tg:{name} Results: {pformat(res)}")
-    # except Exception as exc:
-    #     logger.exception(f"tg:{name}", exc_info=exc)
+    name = f"FDA/SGD-6-01-SST-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.01, "augmentation": True, "use_sst": True}) # will give me a b=10
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = f"FDA/SGD-6-03-SST-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.03, "augmentation": True, "use_sst": True}) # will give me a b=10
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+
+    name = f"FDA/SGD-6-05-SST-AUG-{postfix}"
+    try:
+        logger.info(f"tg:Running {name}")
+        args = TrainFDAOptions().from_dict({"batch_size": 6, "optimizer": "sgd", "fda_beta": 0.05, "augmentation": True, "use_sst": True})
+        res = main(args=args, save_model_postfix=name, writer=SummaryWriter(comment=f"{name}"))
+        all_res[name] = res
+        logger.info(f"tg:{name} Results: {pformat(res)}")
+    except Exception as exc:
+        logger.exception(f"tg:{name}", exc_info=exc)
+    
+    logger.info(f"tg:All Results: {pformat(all_res)}")
     
     # name = "FDA/SST-6-006"
     # try:

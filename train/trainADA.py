@@ -626,7 +626,7 @@ if __name__ == "__main__":
             "GTA5",
             "Cityscapes",
             "Cityscapes",
-            save_model_postfix="3/SGD-6-normal",
+            save_model_postfix="3/SGD-4-normal-B",
             writer=writer,
             args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"})
         )
@@ -642,7 +642,39 @@ if __name__ == "__main__":
             "Cityscapes",
             "Cityscapes",
             augmentation=True,
-            save_model_postfix="3/SGD-6-aug",
+            save_model_postfix="3/SGD-4-aug-B",
+            writer=writer,
+            args=TrainADAOptions().from_dict({"batch_size": 4, "optimizer": "sgd"}),
+        )
+        logger.info(
+            f"tg:3_aug Results: Precision={precision_3_aug} Mean IoU={miou_3_aug}"
+        )
+    except Exception as e:
+        logger.critical("tg:Error on 3_aug", exc_info=e)
+    try:
+        logger.info("tg:Starting task 3: ADA, GTA5 -> Cityscapes")
+        writer = SummaryWriter(comment="task_3_SGD4_normal")
+        precision_3, miou_3 = main(
+            "GTA5",
+            "Cityscapes",
+            "Cityscapes",
+            save_model_postfix="3/SGD-6-normal-B",
+            writer=writer,
+            args=TrainADAOptions().from_dict({"batch_size": 4, "optimizer": "sgd"})
+        )
+        logger.info(f"tg:3 Results: Precision={precision_3} Mean IoU={miou_3}")
+    except Exception as e:
+        logger.critical("tg:Error on 3GCC", exc_info=e)
+
+    try:
+        logger.info("tg:Starting task 3: ADA, GTA5+aug -> Cityscapes")
+        writer = SummaryWriter(comment="task_3_SGD4_aug")
+        precision_3_aug, miou_3_aug = main(
+            "GTA5",
+            "Cityscapes",
+            "Cityscapes",
+            augmentation=True,
+            save_model_postfix="3/SGD-6-aug-B",
             writer=writer,
             args=TrainADAOptions().from_dict({"batch_size": 6, "optimizer": "sgd"}),
         )
